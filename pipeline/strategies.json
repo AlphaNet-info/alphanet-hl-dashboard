@@ -1,0 +1,18 @@
+{
+  "_说明": "策略配置。优先级：内部接口 > deployments 手动映射 > 自动推断。names 用来给自动推断出的策略组起名（键为看板上显示的推断 ID，如 XMR-A）。",
+  "names": {},
+  "deployments": [],
+  "api_url": "",
+  "api_auth_header": "Authorization",
+  "api_auth_prefix": "Bearer ",
+  "api_fields": {
+    "addr": "address",
+    "coin": "asset",
+    "strategy": "strategy",
+    "name": "name",
+    "usdc": "usdc",
+    "start": "start",
+    "stop": "stop",
+    "status": "status"
+  }
+}

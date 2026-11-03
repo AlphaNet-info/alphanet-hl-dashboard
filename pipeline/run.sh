@@ -14,4 +14,5 @@ if [[ "${FULL:-0}" == "1" || ! -s "$PREV" ]]; then PREV_ARG=(); else PREV_ARG=(-
 python3 pipeline/collector.py fetch     --watchlist "$WL" "${PREV_ARG[@]}" --raw "$RAW"
 python3 pipeline/collector.py transform --watchlist "$WL" "${PREV_ARG[@]}" --raw "$RAW" --out data
 python3 pipeline/extras.py --watchlist "$WL" --raw "$RAW" --data data --started "$STARTED"
+python3 pipeline/strategies.py --watchlist "$WL" --raw "$RAW" --data data || echo "策略识别失败（不影响其它数据）"
 rm -f "$RAW"

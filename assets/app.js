@@ -3,13 +3,14 @@
 'use strict';
 
 const API = 'https://api.hyperliquid.xyz/info';
-const FILES = ['meta', 'daily_total', 'addr_daily', 'addr_summary', 'positions', 'alerts', 'alert_rules', 'coin_daily', 'exposure_daily', 'health', 'run_log'];
+const FILES = ['meta', 'daily_total', 'addr_daily', 'addr_summary', 'positions', 'alerts', 'alert_rules', 'coin_daily', 'exposure_daily', 'health', 'run_log', 'strategies'];
 const VIEWS = {
   overview: { t: '公司总览', s: '公司整体经营：资金规模、盈亏、交易量与成本' },
   weekly:   { t: '周报 / 月报', s: '按 ISO 周（周一至周日）与自然月汇总，UTC 口径' },
   ops:      { t: '运营分析', s: '地址活跃度、交易量贡献、成交结构与费率' },
   address:  { t: '地址分析', s: '每个监控地址的表现、明细与盈亏热力图' },
   coins:    { t: '币种分析', s: '各币种成交、盈亏、Maker/Taker 与多空方向' },
+  strategy: { t: '策略分析', s: '按策略（地址 × 币种部署组合）汇总盈亏、触发与成员表现' },
   risk:     { t: '风控与持仓', s: '风险提醒、持仓敞口、杠杆、强平距离与回撤' },
   devops:   { t: '运维监控', s: '数据新鲜度、采集管道健康、数据质量检查与 API 探测' },
 };
@@ -71,6 +72,9 @@ function prep(D) {
   S.summaryFile = D.addr_summary || [];
   S.positionsFile = D.positions || [];
   S.alerts = D.alerts || [];
+  const ST = D.strategies || { combos: [] };
+  S.stratMeta = ST;
+  S.strat = Object.fromEntries((ST.combos || []).map(c => [c.addr + '|' + c.coin, c]));
   applyLive();
 }
 
@@ -600,7 +604,7 @@ function addrDetail(days) {
     ${card('每日官方盈亏', '', chartBox('d-pnl', 'short'))}
   </div>
   <div class="grid g2">
-    ${card('币种贡献', '区间成交口径', table('d-coin', [{ k: 'coin', t: '币种', f: r => `<b>${esc(r.coin)}</b>` }, { k: 'volume', t: '交易量', n: 1, f: r => usd(r.volume) },
+    ${card('币种贡献', '区间成交口径', table('d-coin', [{ k: 'coin', t: '币种', f: r => `<b>${esc(r.coin)}</b>` }, { k: 'st', t: '策略', v: r => stratOf(a, r.coin).strategy, f: r => { const c = stratOf(a, r.coin); return `<a href="#strategy/${encodeURIComponent(c.strategy)}">${esc(c.name || c.strategy)}</a>`; } }, { k: 'volume', t: '交易量', n: 1, f: r => usd(r.volume) },
       { k: 'fills', t: '笔数', n: 1, f: r => int(r.fills) }, { k: 'realized_pnl', t: '已实现', n: 1, f: r => sp(r.realized_pnl) }, { k: 'fees', t: '手续费', n: 1, f: r => usd(r.fees) },
       { k: 'net', t: '净盈亏', n: 1, f: r => sp(r.net) }], coins, { sort: 'volume' }))}
     ${card('当前持仓', S.live ? '实时' : '最近快照', posTable('d-pos', P, true))}
@@ -620,6 +624,7 @@ function posTable(id, P, compact) {
   const cols = [
     ...(compact ? [] : [{ k: 'label', t: '地址', f: r => `<a href="#address/${r.addr}">${esc(r.label)}</a>` }]),
     { k: 'coin', t: '币种', f: r => `<b>${esc(r.coin)}</b>` },
+    { k: 'strat', t: '策略', v: r => stratOf(r.addr, r.coin).strategy, f: r => { const c = stratOf(r.addr, r.coin); return `<a href="#strategy/${encodeURIComponent(c.strategy)}">${esc(c.name || c.strategy)}</a>`; } },
     { k: 'side', t: '方向', f: r => `<span class="chip ${r.side === '多' ? 'ok' : 'crit'}">${r.side}</span>` },
     { k: 'notional', t: '名义价值', n: 1, f: r => usd(r.notional) },
     { k: 'entry_px', t: '开仓价', n: 1, f: r => (+r.entry_px).toPrecision(6) },
@@ -785,6 +790,192 @@ function vDevops() {
   return [html, after];
 }
 
+/* ---------- strategy ---------- */
+const stratOf = (addr, coin) => S.strat[addr + '|' + coin] || { strategy: coin + '-未识别', name: coin + '-未识别', source: '推断', key: addr + '|' + coin };
+const isSolo = sid => /-独立-|-未识别$/.test(sid);
+const stratName = c => c.name && c.name !== c.strategy ? `${esc(c.name)} <span class="muted">${esc(c.strategy)}</span>` : esc(c.strategy);
+const SRC_CLS = { '推断': 'mute', '映射': 'info', '接口': 'ok' };
+
+function aggStrat(days) {
+  const set = new Set(days), m = {};
+  const ensure = c => m[c.strategy] ||= { id: c.strategy, name: c.name || c.strategy, coin: c.coin || c.strategy.split('-')[0], source: c.source, solo: isSolo(c.strategy),
+    combos: new Set(), active: new Set(), volume: 0, fills: 0, realized: 0, fees: 0, funding: 0, wins: 0, losses: 0, daily: {}, dailyActive: {}, usdc: 0, hasUsdc: false };
+  for (const c of S.stratMeta.combos || []) {
+    const g = ensure(c); g.combos.add(c.key);
+    if (c.usdc != null) { g.usdc += +c.usdc; g.hasUsdc = true; }
+  }
+  for (const r of S.cd) {
+    if (!set.has(r.day)) continue;
+    const c = stratOf(r.addr, r.coin), g = ensure(c);
+    g.combos.add(r.addr + '|' + r.coin);
+    const net = r.realized_pnl - r.fees + (r.funding || 0);
+    g.volume += r.volume; g.fills += r.fills; g.realized += r.realized_pnl; g.fees += r.fees; g.funding += r.funding || 0; g.wins += r.wins || 0; g.losses += r.losses || 0;
+    g.daily[r.day] = (g.daily[r.day] || 0) + net;
+    if (r.fills > 0) { g.active.add(r.addr); (g.dailyActive[r.day] ||= new Set()).add(r.addr); }
+  }
+  for (const g of Object.values(m)) {
+    g.net = g.realized - g.fees + g.funding;
+    const dv = Object.values(g.daily);
+    g.winDays = dv.filter(v => v > 0).length; g.lossDays = dv.filter(v => v < 0).length;
+    g.worstDay = dv.length ? Math.min(...dv) : 0;
+    g.bps = g.volume ? g.net / g.volume * 1e4 : 0;
+    g.wr = g.wins + g.losses ? g.wins / (g.wins + g.losses) : null;
+    g.members = new Set([...g.combos].map(k => k.split('|')[0])).size;
+    const P = S.positions.filter(p => stratOf(p.addr, p.coin).strategy === g.id);
+    g.long = sum(P.filter(p => p.side === '多'), p => p.notional); g.short = sum(P.filter(p => p.side === '空'), p => p.notional); g.upnl = sum(P, p => p.unrealized_pnl);
+    g.roi = g.hasUsdc && g.usdc > 0 ? g.net / g.usdc : null;
+  }
+  return Object.values(m);
+}
+
+function vStrategy(param) {
+  const days = rangeDays(), set = new Set(days);
+  const all = aggStrat(days).filter(g => g.volume > 0 || g.long || g.short);
+  const groups = all.filter(g => !g.solo).sort((a, b) => b.volume - a.volume);
+  const solos = all.filter(g => g.solo);
+  const soloAgg = solos.length ? { id: '独立组合', name: `独立 / 未识别组合（${solos.length} 个）`, coin: '多币种', source: '推断', solo: true,
+    members: new Set(solos.flatMap(g => [...g.combos].map(k => k.split('|')[0]))).size, active: new Set(solos.flatMap(g => [...g.active])),
+    volume: sum(solos, g => g.volume), fills: sum(solos, g => g.fills), realized: sum(solos, g => g.realized), fees: sum(solos, g => g.fees), funding: sum(solos, g => g.funding),
+    net: sum(solos, g => g.net), wins: sum(solos, g => g.wins), losses: sum(solos, g => g.losses), long: sum(solos, g => g.long), short: sum(solos, g => g.short), upnl: sum(solos, g => g.upnl),
+    winDays: null, lossDays: null, worstDay: null, roi: null, hasUsdc: false } : null;
+  if (soloAgg) { soloAgg.bps = soloAgg.volume ? soloAgg.net / soloAgg.volume * 1e4 : 0; soloAgg.wr = soloAgg.wins + soloAgg.losses ? soloAgg.wins / (soloAgg.wins + soloAgg.losses) : null; }
+  const rows = groups.concat(soloAgg ? [soloAgg] : []);
+  const totVol = sum(all, g => g.volume);
+  const lastDay = days[days.length - 1];
+  const srcCnt = {}; (S.stratMeta.combos || []).forEach(c => srcCnt[c.source] = (srcCnt[c.source] || 0) + 1);
+  const allInferred = !srcCnt['映射'] && !srcCnt['接口'];
+  const byNet = groups.slice().sort((a, b) => b.net - a.net);
+  if (param && all.find(g => g.id === decodeURIComponent(param))) S.strSel = decodeURIComponent(param);
+  if (!S.strSel || !all.find(g => g.id === S.strSel)) S.strSel = groups[0]?.id;
+  const activeYday = all.reduce((n, g) => n + (g.dailyActive?.[lastDay]?.size || 0), 0);
+  const combosAll = (S.stratMeta.combos || []);
+  // dormant combos
+  const cdByCombo = {}; S.cd.forEach(r => { if (!r.fills) return; const k = r.addr + '|' + r.coin; const x = cdByCombo[k] ||= { days: 0, net: 0 }; x.days++; x.net += r.realized_pnl - r.fees + (r.funding || 0); });
+  const posKey = new Set(S.positions.map(p => p.addr + '|' + p.coin));
+  const dormant = combosAll.filter(c => c.last && !isSolo(c.strategy) && c.last < S.days[Math.max(0, S.days.length - 3)] ).map(c => ({ ...c, label: S.label[c.addr], days: cdByCombo[c.key]?.days || 0, net: cdByCombo[c.key]?.net || 0, pos: posKey.has(c.key) }))
+    .sort((a, b) => a.last.localeCompare(b.last));
+
+  const cols = [
+    { k: 'name', t: '策略', f: r => r.id === '独立组合' ? `<span class="muted">${esc(r.name)}</span>` : `<b>${stratName({ name: r.name, strategy: r.id })}</b>`, v: r => r.id === '独立组合' ? 'zzz' : r.id },
+    { k: 'coin', t: '币种' },
+    { k: 'source', t: '来源', f: r => `<span class="chip ${SRC_CLS[r.source] || 'mute'}">${esc(r.source)}</span>` },
+    { k: 'members', t: '地址', n: 1, tip: '部署了该策略的地址数' },
+    { k: 'act', t: '区间活跃', n: 1, v: r => r.active.size, f: r => r.active.size },
+    { k: 'volume', t: '交易量', n: 1, f: r => usd(r.volume) },
+    { k: 'share', t: '占比', n: 1, v: r => r.volume, f: r => pct(totVol ? r.volume / totVol : 0, 1) },
+    { k: 'realized', t: '已实现', n: 1, f: r => sp(r.realized) },
+    { k: 'fees', t: '手续费', n: 1, f: r => usd(r.fees) },
+    { k: 'funding', t: '资金费', n: 1, f: r => sp(r.funding) },
+    { k: 'net', t: '交易净盈亏', n: 1, f: r => sp(r.net) },
+    { k: 'bps', t: '净盈亏/交易量', n: 1, f: r => `<span class="${cls(r.bps)}">${r.bps.toFixed(1)} bps</span>`, tip: '每成交 1 万美元赚/亏多少美元' },
+    { k: 'roi', t: '收益率', n: 1, f: r => r.roi == null ? '<span class="muted" title="接入部署 USDC 后显示">—</span>' : spp(r.roi), tip: '交易净盈亏 ÷ 部署 USDC（需要映射或接口提供 USDC）' },
+    { k: 'wr', t: '平仓胜率', n: 1, f: r => r.wr == null ? '—' : pct(r.wr, 0) },
+    { k: 'winDays', t: '盈/亏天', n: 1, f: r => r.winDays == null ? '—' : `<span class="pos">${r.winDays}</span>/<span class="neg">${r.lossDays}</span>` },
+    { k: 'worstDay', t: '最大日亏', n: 1, f: r => r.worstDay == null ? '—' : sp(r.worstDay) },
+    { k: 'pos', t: '当前持仓', n: 1, v: r => r.long - r.short, f: r => (r.long ? `<span class="pos">多 ${usd(r.long)}</span> ` : '') + (r.short ? `<span class="neg">空 ${usd(r.short)}</span>` : '') || '—' },
+    { k: 'upnl', t: '浮动盈亏', n: 1, f: r => r.long || r.short ? sp(r.upnl) : '—' },
+  ];
+  const top = groups.slice(0, 8);
+  const html = `
+  ${allInferred ? `<div class="bn info"><b>ⓘ 策略为自动推断</b><span>同一策略会在多个钱包上同时下单，看板按「成交分钟 + 方向」的重合度把地址 × 币种组合聚成策略组（如 XMR-A、XMR-B）。可在 <code>pipeline/strategies.json</code> 的 <code>names</code> 里给它们起真实名称，或配置内部部署接口（GitHub Secrets：<code>ALPHANET_DEPLOYMENTS_URL</code> / <code>ALPHANET_API_TOKEN</code>）后自动替换为真实策略与部署 USDC。</span></div>` : ''}
+  <div class="kpis">
+    ${kpi('策略组', `${groups.length}`, `另有 ${solos.length} 个独立组合`)}
+    ${kpi('部署组合', combosAll.length, `地址 × 币种 · 来源 ${Object.entries(srcCnt).map(([k, v]) => k + ' ' + v).join(' / ')}`)}
+    ${kpi('昨日活跃组合', activeYday, lastDay ? lastDay.slice(5) : '')}
+    ${kpi('策略组交易量占比', pct(totVol ? sum(groups, g => g.volume) / totVol : 0, 1), `区间 ${usd(sum(groups, g => g.volume))}`)}
+    ${kpi('最佳策略', byNet[0] ? esc(byNet[0].name) : '—', byNet[0] ? sp(byNet[0].net) + ` · ${byNet[0].bps.toFixed(1)} bps` : '')}
+    ${kpi('最差策略', byNet.length ? esc(byNet[byNet.length - 1].name) : '—', byNet.length ? sp(byNet[byNet.length - 1].net) + ` · ${byNet[byNet.length - 1].bps.toFixed(1)} bps` : '')}
+    ${kpi('策略组净盈亏', sp(sum(groups, g => g.net)), `已实现 ${sp(sum(groups, g => g.realized))} · 手续费 ${usd(sum(groups, g => g.fees))}`)}
+    ${kpi('休眠组合', dormant.length, '策略组内 ≥3 天未成交')}
+  </div>
+  ${card('策略汇总', '交易净盈亏 = 已实现 − 手续费 + 资金费（成交口径，不含持仓浮盈）。点击行查看策略详情', table('st', cols, rows, { sort: 'volume', click: 'id', selKey: 'id' }).replace(`data-id="独立组合"`, ''))}
+  <div class="grid g2">
+    ${card('累计交易净盈亏 · 策略组', `按交易量取前 ${top.length} 个策略组`, legend(top.map((g, i) => [SERIES()[i], g.name])) + chartBox('st-cum', 'tall'))}
+    ${card('策略净盈亏排行', '区间交易净盈亏', chartBox('st-bar', 'tall'))}
+  </div>
+  ${card('策略触发监控', '策略组 × 日期：颜色越深，当天下单的成员地址越多；空白 = 当天没有任何成员成交', heatmap(groups.map(g => g.id), id => (all.find(g => g.id === id) || {}).name || id, days, (id, d) => {
+    const g = all.find(x => x.id === id); const n = g.dailyActive[d]?.size || 0;
+    return n ? { v: n / Math.max(1, g.members), t: `${g.name} · ${d}\n下单地址 ${n} / ${g.members}\n交易净盈亏 ${usd(g.daily[d] || 0, { sign: true })}` } : { v: null, t: `${g.name} · ${d}\n无成交` };
+  }, { colFmt: shortDay, max: 1, mono: 1 }))}
+  <div id="st-detail"></div>
+  <div class="grid g2">
+    ${card('休眠组合', '属于策略组、但最近 3 天以上没有成交的地址 × 币种', table('st-dorm', [
+      { k: 'label', t: '地址', f: r => `<a href="#address/${r.addr}">${esc(r.label)}</a>` }, { k: 'strategy', t: '策略', f: r => stratName(r) },
+      { k: 'first', t: '首次' }, { k: 'last', t: '最后成交' }, { k: 'days', t: '交易天数', n: 1 }, { k: 'net', t: '累计净盈亏', n: 1, f: r => sp(r.net) },
+      { k: 'pos', t: '持仓', f: r => r.pos ? '<span class="chip info">持仓中</span>' : '<span class="chip mute">无</span>' }], dormant, { empty: '没有休眠组合', scroll: 1 }))}
+    ${card('识别方法', '', `<dl class="kv">
+      <dt>依据</dt><dd>AlphaNet 一个账户的一个币种只部署一个策略，所以「地址 × 币种」就是一个部署组合；同一策略的信号会在多个钱包几乎同时成交</dd>
+      <dt>窗口</dt><dd>最近 ${S.stratMeta.method?.window_days ?? 21} 天成交，至少 ${S.stratMeta.method?.min_signals ?? 20} 个成交分钟</dd>
+      <dt>聚类</dt><dd>按「成交分钟 + 方向」的 Jaccard 重合度做平均链接聚类，阈值 ${S.stratMeta.method?.link ?? 0.18}</dd>
+      <dt>部署接口</dt><dd>${esc(S.stratMeta.api || '未配置')}</dd>
+      <dt>手动映射</dt><dd>${S.stratMeta.manual || 0} 条</dd>
+      <dt>更新</dt><dd>${S.stratMeta.generated_at ? bj(S.stratMeta.generated_at) : '—'}</dd></dl>` +
+      table('st-grp', [{ k: 'id', t: '策略组' }, { k: 'coin', t: '币种' }, { k: 'members', t: '成员', n: 1 }, { k: 'similarity', t: '平均重合度', n: 1, f: r => pct(r.similarity, 0) }], S.stratMeta.groups || [], { flush: 1 }))}
+  </div>`;
+  const after = () => {
+    const cum = top.map(g => { let c = 0; return days.map(d => (c += g.daily[d] || 0)); });
+    mk('st-cum', 'line', days.map(shortDay), top.map((g, i) => lineDs(g.name, cum[i], SERIES()[i])), { zero: false });
+    const bn = byNet.concat(soloAgg ? [soloAgg] : []).sort((a, b) => b.net - a.net);
+    mk('st-bar', 'bar', bn.map(g => g.id === '独立组合' ? '独立组合' : g.name), [{ ...barDs('交易净盈亏', bn.map(g => g.net)), backgroundColor: pnColors(bn.map(g => g.net)) }], { horizontal: true });
+    document.querySelectorAll('[data-tbl="st"] tbody tr[data-id]').forEach(tr => tr.onclick = () => { S.strSel = tr.dataset.id; history.replaceState(null, '', '#strategy/' + encodeURIComponent(S.strSel)); render(true); $('#st-detail')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); });
+    stratDetail(days, all);
+  };
+  return [html, after];
+}
+
+function stratDetail(days, all) {
+  const g = all.find(x => x.id === S.strSel), box = $('#st-detail');
+  if (!g || !box) return;
+  const set = new Set(days);
+  const keys = new Set((S.stratMeta.combos || []).filter(c => c.strategy === g.id).map(c => c.key));
+  S.cd.forEach(r => { if (set.has(r.day) && stratOf(r.addr, r.coin).strategy === g.id) keys.add(r.addr + '|' + r.coin); });
+  const mem = [...keys].map(k => {
+    const [addr, coin] = k.split('|'), c = S.strat[k] || {};
+    const rs = S.cd.filter(r => r.addr === addr && r.coin === coin && set.has(r.day));
+    const P = S.positions.filter(p => p.addr === addr && p.coin === coin);
+    const net = sum(rs, r => r.realized_pnl - r.fees + (r.funding || 0)), vol = sum(rs, r => r.volume), w = sum(rs, r => r.wins), l = sum(rs, r => r.losses);
+    const daily = {}; rs.forEach(r => daily[r.day] = (daily[r.day] || 0) + r.realized_pnl - r.fees + (r.funding || 0));
+    return { key: k, addr, coin, label: S.label[addr], first: c.first, last: c.last, days: rs.filter(r => r.fills).length, volume: vol, fills: sum(rs, r => r.fills),
+      net, bps: vol ? net / vol * 1e4 : 0, wr: w + l ? w / (w + l) : null, usdc: c.usdc, signals: c.signals_21d, daily,
+      pos: P.map(p => `${p.side} ${usd(p.notional)}`).join(' / '), upnl: sum(P, p => p.unrealized_pnl), hasPos: P.length > 0 };
+  }).sort((a, b) => b.volume - a.volume);
+  const nets = mem.filter(m => m.volume > 0).map(m => m.bps);
+  const spread = nets.length > 1 ? Math.max(...nets) - Math.min(...nets) : 0;
+  const top = mem.slice(0, 8);
+  box.innerHTML = `
+  <div class="sec-t">策略详情 · ${stratName({ name: g.name, strategy: g.id })} <span class="chip ${SRC_CLS[g.source] || 'mute'}">${esc(g.source)}</span></div>
+  <div class="kpis">
+    ${kpi('成员地址', g.members, `区间活跃 ${g.active.size}`)}
+    ${kpi('交易量', usd(g.volume), `${int(g.fills)} 笔`)}
+    ${kpi('交易净盈亏', sp(g.net), `${g.bps.toFixed(1)} bps${g.roi != null ? ' · 收益率 ' + pct(g.roi, 2, true) : ''}`)}
+    ${kpi('已实现 / 手续费', sp(g.realized), `手续费 ${usd(g.fees)} · 资金费 ${sp(g.funding)}`)}
+    ${kpi('平仓胜率', g.wr == null ? '—' : pct(g.wr, 0), `盈 ${g.winDays} 天 / 亏 ${g.lossDays} 天`)}
+    ${kpi('成员表现离散度', `${spread.toFixed(1)} bps`, '同一策略各地址 净盈亏/交易量 的最大差', '同一信号在不同钱包的结果差异；差距大说明执行（仓位、时点、滑点）不一致')}
+    ${kpi('当前持仓', (g.long ? usd(g.long) + ' 多 ' : '') + (g.short ? usd(g.short) + ' 空' : '') || '无', g.long || g.short ? `浮盈 ${sp(g.upnl)}` : '')}
+  </div>
+  <div class="grid g2">
+    ${card('每日交易净盈亏', '', chartBox('sd-pnl', 'short'))}
+    ${card('成员累计净盈亏', `交易量前 ${top.length} 个成员`, legend(top.map((m, i) => [SERIES()[i], m.label.split(' ')[0]])) + chartBox('sd-cum', 'short'))}
+  </div>
+  ${card('成员明细', '同一策略在不同地址上的表现', table('sd-mem', [
+    { k: 'label', t: '地址', f: r => `<a href="#address/${r.addr}">${esc(r.label)}</a>` },
+    { k: 'first', t: '首次' }, { k: 'last', t: '最后成交' }, { k: 'days', t: '交易天数', n: 1 },
+    { k: 'volume', t: '交易量', n: 1, f: r => usd(r.volume) }, { k: 'fills', t: '笔数', n: 1, f: r => int(r.fills) },
+    { k: 'net', t: '交易净盈亏', n: 1, f: r => sp(r.net) }, { k: 'bps', t: 'bps', n: 1, f: r => `<span class="${cls(r.bps)}">${r.bps.toFixed(1)}</span>` },
+    { k: 'wr', t: '平仓胜率', n: 1, f: r => r.wr == null ? '—' : pct(r.wr, 0) },
+    { k: 'usdc', t: '部署 USDC', n: 1, f: r => r.usdc == null ? '—' : usd(r.usdc) },
+    { k: 'signals', t: '21 天成交分钟', n: 1, f: r => r.signals ?? '—' },
+    { k: 'pos', t: '持仓', f: r => r.pos || '<span class="muted">无</span>' }, { k: 'upnl', t: '浮动盈亏', n: 1, f: r => r.hasPos ? sp(r.upnl) : '—' }], mem, { sort: 'volume' }))}
+  ${card('成员 × 日期 交易净盈亏', '', heatmap(mem.map(m => m.key), k => S.label[k.split('|')[0]], days, (k, d) => {
+    const m = mem.find(x => x.key === k); const v = m.daily[d];
+    return v == null ? null : { v, t: `${m.label} · ${d}\n交易净盈亏 ${usd(v, { sign: true })}` };
+  }, { colFmt: shortDay }))}`;
+  const pd = days.map(d => g.daily[d] || 0);
+  mk('sd-pnl', 'bar', days.map(shortDay), [{ ...barDs('交易净盈亏', pd), backgroundColor: pnColors(pd) }]);
+  mk('sd-cum', 'line', days.map(shortDay), top.map((m, i) => { let c = 0; return lineDs(m.label.split(' ')[0], days.map(d => (c += m.daily[d] || 0)), SERIES()[i]); }), { zero: false });
+  bindSort(box);
+}
+
 async function probe() {
   const out = $('#probe-out'); out.textContent = '探测中…';
   const tests = [['meta', { type: 'meta' }], ['allMids', { type: 'allMids' }], ['clearinghouseState', { type: 'clearinghouseState', user: S.addrs[0]?.addr }]];
@@ -829,7 +1020,7 @@ function render(keepScroll) {
   document.querySelectorAll('#range button').forEach(b => b.classList.toggle('on', +b.dataset.r === S.range));
   $('#range').style.visibility = ['risk', 'weekly'].includes(S.view) ? 'hidden' : '';
   banners();
-  const fn = { overview: vOverview, weekly: vWeekly, ops: vOps, address: vAddress, coins: vCoins, risk: vRisk, devops: vDevops }[S.view];
+  const fn = { overview: vOverview, weekly: vWeekly, ops: vOps, address: vAddress, coins: vCoins, strategy: vStrategy, risk: vRisk, devops: vDevops }[S.view];
   let out;
   try { out = fn(param); } catch (e) { console.error(e); out = `<div class="bn crit">渲染出错：${esc(e.message)}</div>`; }
   const [html, after] = Array.isArray(out) ? out : [out, null];

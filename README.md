@@ -11,6 +11,7 @@
 | 运营分析 | 运营 | 活跃地址、成交笔数、地址交易量贡献与集中度、币种分布、Maker/Taker 结构、开仓方向、资金分层、地址状态、分组、地址运营明细（活跃天数、连续闲置、换手、费率） |
 | 地址分析 | 运营 / 风控 | 地址总览表（可搜索、排序），点击进入单地址详情（资金曲线、每日盈亏、币种贡献、持仓、每日明细、Explorer 链接），以及地址 × 日期盈亏热力图 |
 | 币种分析 | 运营 / 研究 | 每日币种交易量堆叠、币种明细（净盈亏、平仓胜率、Maker 占比、多空方向、当前持仓），以及币种 × 日期盈亏热力图 |
+| 策略分析 | 策略 / 研究 | 策略汇总：交易量、已实现、手续费、资金费、交易净盈亏、bps、收益率、胜率、盈亏天、最大日亏、持仓；累计净盈亏曲线与排行；策略触发监控（策略 × 日期）；策略详情（成员地址对比、成员离散度、成员 × 日期热力图）；休眠组合 |
 | 风控与持仓 | 风控 | 严重 / 警告 / 提示数量，持仓名义、净敞口、组合杠杆、强平距离、集中度；风险提醒列表；币种多空敞口；地址杠杆与回撤（带阈值线）；持仓明细；预警规则 |
 | 运维监控 | 运维 | 管道健康状态、数据新鲜度、上次耗时、API 调用和限流次数、9 项数据质量检查、运行记录、数据覆盖矩阵、各地址抓取统计、数据文件、口径偏差、浏览器端 API 探测 |
 
@@ -62,13 +63,28 @@ python3 -m http.server 8000   # 打开 http://localhost:8000
 - 新加入的地址会在下次运行时自动拉取全部历史。
 - 需要全量重建时，在 Actions 中手动运行并把 `full` 设为 `1`，或者本地执行 `FULL=1 bash pipeline/run.sh`。
 
+## 策略识别
+
+AlphaNet 规定一个账户的一个币种只部署一个策略，所以「地址 × 币种」就是一个部署组合。`pipeline/strategies.py` 按以下优先级给每个组合确定所属策略：
+
+1. **内部部署接口**：在 GitHub 仓库的 Settings → Secrets → Actions 中配置 `ALPHANET_DEPLOYMENTS_URL` 和 `ALPHANET_API_TOKEN`。
+   - 接口返回的字段名如果和默认的不同（`address / asset / strategy / name / usdc / start / stop / status`），在 `pipeline/strategies.json` 的 `api_fields` 里改成实际的字段名。
+   - 返回中的币种可以写成 `PERP_ZEC_USDC` 这类格式，会自动转换成 `ZEC`。
+   - 部署 USDC 用来计算收益率。
+2. **手动映射**：在 `pipeline/strategies.json` 的 `deployments` 里填写，例如 `{"addr": "0x…", "coin": "XMR", "strategy": "Hackworth OptimaLong", "usdc": 50000}`。
+3. **自动推断**（默认）：同一策略的信号会在多个钱包几乎同时成交。程序取最近 21 天的成交，按「成交分钟 + 方向」的重合度（Jaccard）做平均链接聚类，聚成 `XMR-A`、`XMR-B` 这样的策略组。
+   - 在 `names` 里写 `{"XMR-A": "真实策略名"}` 即可改成真实名称。
+   - 与其它钱包都不重合的组合会标为「独立组合」。
+   - 推断依赖的成交缓存保存在 `pipeline/cache/signals.json`，每天随数据一起提交。
+
 ## 数据管道
 
 ```
 pipeline/run.sh
  ├─ collector.py fetch      增量抓取 userFillsByTime / userFunding / portfolio / clearinghouseState（429 自动退避）
  ├─ collector.py transform  → daily_total / addr_daily / addr_summary / positions / alerts / alert_rules
- └─ extras.py               → coin_daily（币种维度，增量合并）/ exposure_daily（持仓快照）/ health / run_log / meta
+ ├─ extras.py               → coin_daily（币种维度，增量合并）/ exposure_daily（持仓快照）/ health / run_log / meta
+ └─ strategies.py           → strategies（地址 × 币种 → 策略：接口 > 映射 > 自动推断）
 ```
 
 `collector.py` 与 Claude 看板里的采集脚本口径一致，在此基础上增加了：
