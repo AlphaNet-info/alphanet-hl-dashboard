@@ -105,7 +105,8 @@ class Client:
         self.prefix = api.get("auth_prefix") or ""
         self.dep_path = api.get("deployments_path") or "/internal/v1/deployments"
         self.str_path = api.get("strategies_path") or "/internal/v1/strategies"
-        self.limit = int(api.get("limit") or 500)
+        self.limit = int(api.get("limit") or 1000)
+        self.since_start = os.environ.get("ALPHANET_API_SINCE") or api.get("since_start")   # 北京时间 YYYY-MM-DD HH:mm:ss
         self.fields = api.get("fields") or {}
         self.sfields = api.get("strategy_fields") or {}
         self.calls = 0
@@ -126,7 +127,7 @@ class Client:
         return None
 
     def deployments(self):
-        out, seen, since, pages = [], set(), None, 0
+        out, seen, since, pages = [], set(), self.since_start, 0
         while pages < 500:
             params = {"limit": self.limit}
             if since: params["since"] = since

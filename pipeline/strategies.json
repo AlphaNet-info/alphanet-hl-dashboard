@@ -31,7 +31,8 @@
     "deployments_path": "/internal/v1/deployments",
     "strategies_path": "/internal/v1/strategies",
     "auth_header": "Internal-API-Key",
-    "limit": 500,
+    "since_start": "2026-10-01 14:28:59",
+    "limit": 1000,
     "fields": {},
     "strategy_fields": {}
   }
