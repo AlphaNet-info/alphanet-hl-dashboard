@@ -1,23 +1,38 @@
 {
-  "_说明": "策略分类配置。按币种归类，不按地址。优先级：内部接口 > deployments 手动指定 > families 币种规则。",
+  "_说明": "策略分类按币种（families）。部署金额来自 AlphaNet 内部接口（Internal-API-Key），密钥放在 GitHub Secret ALPHANET_API_KEY。接口字段名识别不对时，在 api.fields / api.strategy_fields 里显式指定（支持 a.b 嵌套）。没有接口时可在 deployments 手动填。",
   "families": [
-    { "name": "Archimedes PI", "coins": ["ZEC", "XMR"], "prefix": "Archimedes" },
-    { "name": "Archimedes", "coins": ["BNB", "SOL", "ETH", "DOGE"], "prefix": "Archimedes" },
-    { "name": "Hackworth", "coins": "*", "prefix": "Hackworth" }
+    {
+      "name": "Archimedes PI",
+      "coins": [
+        "ZEC",
+        "XMR"
+      ],
+      "prefix": "Archimedes"
+    },
+    {
+      "name": "Archimedes",
+      "coins": [
+        "BNB",
+        "SOL",
+        "ETH",
+        "DOGE"
+      ],
+      "prefix": "Archimedes"
+    },
+    {
+      "name": "Hackworth",
+      "coins": "*",
+      "prefix": "Hackworth"
+    }
   ],
   "deployments": [],
-  "api_url": "",
-  "api_auth_header": "Authorization",
-  "api_auth_prefix": "Bearer ",
-  "api_fields": {
-    "addr": "address",
-    "coin": "asset",
-    "strategy": "strategy",
-    "family": "family",
-    "name": "name",
-    "usdc": "usdc",
-    "start": "start",
-    "stop": "stop",
-    "status": "status"
+  "api": {
+    "base_url": "https://trades.alphanet.global/api",
+    "deployments_path": "/internal/v1/deployments",
+    "strategies_path": "/internal/v1/strategies",
+    "auth_header": "Internal-API-Key",
+    "limit": 500,
+    "fields": {},
+    "strategy_fields": {}
   }
 }

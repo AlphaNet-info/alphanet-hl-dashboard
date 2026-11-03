@@ -3,7 +3,7 @@
 'use strict';
 
 const API = 'https://api.hyperliquid.xyz/info';
-const FILES = ['meta', 'daily_total', 'addr_daily', 'addr_summary', 'positions', 'alerts', 'alert_rules', 'coin_daily', 'exposure_daily', 'health', 'run_log', 'strategies', 'deployments'];
+const FILES = ['meta', 'daily_total', 'addr_daily', 'addr_summary', 'positions', 'alerts', 'alert_rules', 'coin_daily', 'exposure_daily', 'health', 'run_log', 'strategies', 'deployments', 'strategy_catalog'];
 const VIEWS = {
   overview: { t: '公司总览', s: '公司整体经营：资金规模、盈亏、交易量与成本' },
   weekly:   { t: '周报 / 月报', s: '按 ISO 周（周一至周日）与自然月汇总，UTC 口径' },
@@ -75,7 +75,9 @@ function prep(D) {
   const ST = D.strategies || { combos: [] };
   S.stratMeta = ST;
   S.strat = Object.fromEntries((ST.combos || []).map(c => [c.addr + '|' + c.coin, c]));
-  S.deps = (D.deployments || []).filter(d => d.usdc != null);
+  S.depsAll = (D.deployments || []).filter(d => d.usdc != null);
+  S.deps = S.depsAll.filter(d => d.watched !== false && S.label[d.addr]);
+  S.catalog = D.strategy_catalog || [];
   S.hasDep = S.deps.length > 0;
   S.today = new Date().toISOString().slice(0, 10);
   applyLive();
@@ -790,7 +792,7 @@ function vDevops() {
     ${kpi('检查项', `${(H.checks || []).length - failed.length} / ${(H.checks || []).length} 通过`, failed.length ? `${crit} 严重 · ${warn} 警告 · ${failed.length - crit - warn} 提示` : '全部通过')}
     ${kpi('监控地址', (meta.addresses || S.addrs).length, `起始日 ${meta.since || '—'}`)}
     ${kpi('数据文件', files.length, `合计 ${(sum(files, f => f.bytes) / 1024).toFixed(0)} KB`)}
-    ${kpi('部署接口', S.hasDep ? `<span class="pos">已接入</span>` : '<span class="muted">未接入</span>', esc(S.stratMeta.api || '未配置') + (S.hasDep ? ` · ${S.deps.length} 条部署` : ''), '配置 GitHub Secrets：ALPHANET_DEPLOYMENTS_URL / ALPHANET_API_TOKEN')}
+    ${kpi('部署接口', S.hasDep ? `<span class="pos">已接入</span>` : '<span class="muted">未接入</span>', esc(S.stratMeta.api || '未配置') + (S.hasDep ? ` · ${S.deps.length} 条部署` : ''), 'GitHub Secret：ALPHANET_API_KEY（Internal-API-Key）')}
     ${kpi('浏览器实时拉取', lv ? `${Object.keys(lv.states).length}/${S.summaryFile.length}` : '未执行', lv ? `平均 ${(sum(lv.lat) / Math.max(1, lv.lat.length)).toFixed(0)} ms · 失败 ${lv.errs.length}` : '点右上角「实时刷新」')}
   </div>
   <div class="grid g2">
@@ -808,6 +810,9 @@ function vDevops() {
     ${card('数据文件', 'data/ 目录', table('dv-files', [{ k: 'n', t: '文件', f: r => `<a href="data/${r.n}" target="_blank">${esc(r.n)}</a>` }, { k: 'rows', t: '行数', n: 1, f: r => r.rows == null ? '—' : int(r.rows) }, { k: 'bytes', t: '大小', n: 1, f: r => (r.bytes / 1024).toFixed(1) + ' KB' }], files))}
   </div>
   ${(H.volume_gaps || []).length ? card('成交额口径偏差', '成交明细汇总 vs Hyperliquid portfolio allTime vlm（官方含监控起始日之前的历史）', table('dv-gap', [{ k: 'label', t: '地址' }, { k: 'official', t: '官方 allTime', n: 1, f: r => usd(r.official) }, { k: 'computed', t: '本看板（起始日以来）', n: 1, f: r => usd(r.computed) }, { k: 'gap_pct', t: '偏差', n: 1, f: r => spp(r.gap_pct, 1) }], H.volume_gaps)) : ''}
+  ${(() => { const un = {}; S.depsAll.filter(d => !S.label[d.addr] && depActive(d, S.today)).forEach(d => { const x = un[d.addr] ||= { addr: d.addr, coins: new Set(), usdc: 0 }; x.coins.add(d.coin); x.usdc += d.usdc; });
+    const L = Object.values(un).map(x => ({ ...x, coins: [...x.coins].join(' / ') }));
+    return L.length ? card(`未纳入监控的部署钱包（${L.length}）`, '内部接口里有正在运行的部署、但不在 pipeline/watchlist.json 里的钱包；需要的话加入名单，下次运行会自动补齐历史', table('dv-un', [{ k: 'addr', t: '钱包', f: r => `<span class="addr">${esc(r.addr)}</span>` }, { k: 'coins', t: '币种' }, { k: 'usdc', t: '部署金额', n: 1, f: r => usd(r.usdc) }], L, { sort: 'usdc', scroll: 1 })) : ''; })()}
   ${lv && lv.errs.length ? card('实时拉取错误', '', `<div class="checks">${lv.errs.map(e => `<div class="check"><span class="ic crit">!</span>${esc(e)}</div>`).join('')}</div>`) : ''}`;
   const after = () => {
     const L = LOG.slice().reverse();
@@ -996,6 +1001,7 @@ function vStrategy(param) {
   ${card('策略 × 日期 交易净盈亏', '按大类排列；颜色越深金额越大', heatmap(visStrats.map(s => s.id), id => id, days, (id, d) => {
     const s = M.st[id], v = s.daily[d]; return v == null ? null : { v, t: `${id} · ${d}\n交易净盈亏 ${usd(v, { sign: true })}\n交易量 ${usd(s.dvol[d] || 0)}\n下单部署 ${s.dact[d]?.size || 0} 个` };
   }, { colFmt: shortDay }))}
+  ${platformCard(fams)}
   <div id="st-detail"></div>
   <div class="grid g2">
     ${card('周度 × 大类', 'ISO 周；交易净盈亏', table('sf-wk', [{ k: 'key', t: '周', nosort: 1, f: r => `<b>${r.key}</b> <span class="muted">${r.start.slice(5)}~${r.end.slice(5)}</span>` }]
@@ -1021,6 +1027,23 @@ function vStrategy(param) {
     stratDetail(days, M);
   };
   return [html, after];
+}
+
+function platformCard(fams) {
+  if (!S.depsAll.length && !S.catalog.length) return '';
+  const all = S.depsAll.filter(d => depActive(d, S.today)), mine = all.filter(d => S.label[d.addr]);
+  const rowsF = fams.map(f => ({ f, all: sum(all.filter(d => d.family === f), d => d.usdc), mine: sum(mine.filter(d => d.family === f), d => d.usdc),
+    wal: new Set(all.filter(d => d.family === f).map(d => d.addr)).size, cat: sum(S.catalog.filter(c => c.family === f), c => c.usdc || 0) }));
+  const tot = { f: '合计', all: sum(rowsF, r => r.all), mine: sum(rowsF, r => r.mine), wal: new Set(all.map(d => d.addr)).size, cat: sum(rowsF, r => r.cat), _tot: 1 };
+  const body = table('pf-fam', [{ k: 'f', t: '大类', nosort: 1, f: r => r._tot ? '<b>合计</b>' : famChip(r.f) },
+    ...(S.depsAll.length ? [{ k: 'all', t: '全平台部署', n: 1, nosort: 1, f: r => usd(r.all) }, { k: 'wal', t: '钱包数', n: 1, nosort: 1 },
+      { k: 'mine', t: '监控地址部署', n: 1, nosort: 1, f: r => usd(r.mine) }, { k: 'cov', t: '监控覆盖', n: 1, nosort: 1, f: r => pct(r.all ? r.mine / r.all : 0, 0) }] : []),
+    ...(S.catalog.length ? [{ k: 'cat', t: '策略目录部署', n: 1, nosort: 1, f: r => usd(r.cat), tip: '/internal/v1/strategies 返回的策略级部署金额' }] : [])], rowsF.concat([tot]));
+  const cat = S.catalog.length ? table('pf-cat', [{ k: 'api_strategy', t: '接口策略名', f: r => esc(r.api_strategy || '—') }, { k: 'family', t: '大类', f: r => famChip(r.family) },
+    { k: 'strategy', t: '看板策略', f: r => `<a href="#strategy/${encodeURIComponent(r.strategy)}">${esc(r.strategy)}</a>` },
+    { k: 'usdc', t: '部署金额', n: 1, f: r => r.usdc == null ? '—' : usd(r.usdc) }, { k: 'count', t: '部署数', n: 1, f: r => r.count == null ? '—' : int(r.count) }, { k: 'status', t: '状态', f: r => esc(r.status || '') }],
+    S.catalog, { sort: 'usdc', flush: 1 }) : '';
+  return card('全平台部署（内部接口）', '内部接口 /internal/v1/deployments 与 /internal/v1/strategies 的当前部署金额，含不在监控名单里的钱包', `<div style="margin-bottom:${cat ? 28 : 0}px">${body}</div>` + (cat ? '<div class="hint" style="margin-top:4px">策略目录（/internal/v1/strategies）</div>' + cat : ''));
 }
 
 function stratDetail(days, M) {

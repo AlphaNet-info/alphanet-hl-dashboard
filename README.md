@@ -63,39 +63,49 @@ python3 -m http.server 8000   # 打开 http://localhost:8000
 - 新加入的地址会在下次运行时自动拉取全部历史。
 - 需要全量重建时，在 Actions 中手动运行并把 `full` 设为 `1`，或者本地执行 `FULL=1 bash pipeline/run.sh`。
 
-## 策略识别
+## 策略分类
 
-AlphaNet 规定一个账户的一个币种只部署一个策略，所以「地址 × 币种」就是一个部署组合。`pipeline/strategies.py` 按以下优先级给每个组合确定所属策略：
+分类按币种，不按地址，规则写在 `pipeline/strategies.json` 的 `families` 里：
 
-1. **内部部署接口**：在 GitHub 仓库的 Settings → Secrets → Actions 中配置 `ALPHANET_DEPLOYMENTS_URL` 和 `ALPHANET_API_TOKEN`。
-   - 接口返回的字段名如果和默认的不同（`address / asset / strategy / name / usdc / start / stop / status`），在 `pipeline/strategies.json` 的 `api_fields` 里改成实际的字段名。
-   - 返回中的币种可以写成 `PERP_ZEC_USDC` 这类格式，会自动转换成 `ZEC`。
-   - 部署 USDC 用来计算收益率。
-2. **手动映射**：在 `pipeline/strategies.json` 的 `deployments` 里填写，例如 `{"addr": "0x…", "coin": "XMR", "strategy": "Hackworth OptimaLong", "usdc": 50000}`。
-3. **自动推断**（默认）：同一策略的信号会在多个钱包几乎同时成交。程序取最近 21 天的成交，按「成交分钟 + 方向」的重合度（Jaccard）做平均链接聚类，聚成 `XMR-A`、`XMR-B` 这样的策略组。
-   - 在 `names` 里写 `{"XMR-A": "真实策略名"}` 即可改成真实名称。
-   - 与其它钱包都不重合的组合会标为「独立组合」。
-   - 推断依赖的成交缓存保存在 `pipeline/cache/signals.json`，每天随数据一起提交。
+| 大类 | 策略 |
+|---|---|
+| Archimedes PI | Archimedes ZEC、Archimedes XMR |
+| Archimedes | Archimedes BNB / SOL / ETH / DOGE |
+| Hackworth | 其余所有币种（Hackworth <币种>） |
 
-## 部署金额
+「信号组」只在策略详情里作参考列，用来标出同一策略下同步下单的地址分组。它的推断缓存保存在 `pipeline/cache/signals.json`。
 
-看板中凡是显示「资金」的地方，旁边都有一列「部署金额」，数据来自内部部署接口的部署 USDC。目前显示为「—」，表示还没接入。
+## 部署金额（AlphaNet 内部接口）
+
+部署金额来自 `https://trades.alphanet.global/api` 的 Hyperliquid Internal 接口，鉴权方式是在请求 Header 中带 `Internal-API-Key`：
+
+- `GET /internal/v1/deployments`：跨钱包的部署流水，包含运行中和已终止的记录，按 `since` / `data.nextSince` 翻页。程序据此算出每个地址、策略、大类在任意一天的部署金额。
+- `GET /internal/v1/strategies`：策略目录，提供策略级的部署金额。
 
 接入步骤：
 
-1. 在 GitHub 仓库的 Settings → Secrets and variables → Actions 中新增两个 Secret：
-   - `ALPHANET_DEPLOYMENTS_URL`：部署接口的完整地址；
-   - `ALPHANET_API_TOKEN`：访问令牌。默认以 `Authorization: Bearer <token>` 方式发送；如果接口要求别的 Header，改 `pipeline/strategies.json` 的 `api_auth_header` 和 `api_auth_prefix`。
-2. 如果接口返回的字段名和默认值不同，在 `pipeline/strategies.json` 的 `api_fields` 里改成实际的字段名。默认字段为 `address / asset / strategy / family / usdc / start / stop / status`。
-3. 手动运行一次 Actions。接入成功后，「运维监控」页的「部署接口」会显示为已接入。
+1. 在 GitHub 仓库的 Settings → Secrets and variables → Actions 中新增 Secret `ALPHANET_API_KEY`，填写 Internal-API-Key。
+   - 如果接口地址不是默认的 `https://trades.alphanet.global/api`，再加一个 `ALPHANET_API_BASE`。
+2. 手动运行一次 Actions。运行成功后：
+   - 「运维监控」页的「部署接口」会显示「已接入」和返回的条数；
+   - 所有「部署金额」一栏会从「—」变成实际金额。
+3. 字段名会自动识别。例如：
+   - 地址：`walletAddress` / `address`
+   - 币种：`asset` / `symbol`
+   - 金额：`usdcAmount` / `usdc` / `amount` …
+   - 起止时间：`startAt` / `stopAt`，单位是 Unix 秒
+   
+   如果识别不对，在 `pipeline/strategies.json` 的 `api.fields`（deployments 用）或 `api.strategy_fields`（strategies 用）里显式指定字段路径，例如 `{"usdc": "allocation.usdc"}`。
 
-接口返回的每条部署都会写入 `data/deployments.json`，包含起止时间，所以任意一天的部署金额都能算出来。接入后看板会：
+接入后看板会：
 
+- 在资金旁边显示部署金额，并给出资金利用率；
 - 画出「资金 vs 部署金额」曲线；
-- 显示资金利用率；
-- 计算策略收益率，即交易净盈亏 ÷ 区间平均部署金额。
+- 计算策略和大类的收益率，即交易净盈亏 ÷ 区间平均部署金额；
+- 在「策略分析」页显示全平台部署和监控覆盖率；
+- 在「运维监控」页列出有部署、但还没加入监控名单的钱包。
 
-暂时没有接口时，也可以在 `pipeline/strategies.json` 的 `deployments` 里手动填写，例如 `{"addr": "0x…", "coin": "ZEC", "usdc": 20000, "start": "2026-10-10"}`。
+接口暂时不可用时，可以在 `pipeline/strategies.json` 的 `deployments` 里手动填写，例如 `{"addr": "0x…", "coin": "ZEC", "usdc": 20000, "start": "2026-10-10"}`。
 
 ## 数据管道
 
@@ -104,7 +114,7 @@ pipeline/run.sh
  ├─ collector.py fetch      增量抓取 userFillsByTime / userFunding / portfolio / clearinghouseState（429 自动退避）
  ├─ collector.py transform  → daily_total / addr_daily / addr_summary / positions / alerts / alert_rules
  ├─ extras.py               → coin_daily（币种维度，增量合并）/ exposure_daily（持仓快照）/ health / run_log / meta
- └─ strategies.py           → strategies（地址 × 币种 → 策略：接口 > 映射 > 自动推断）
+ └─ strategies.py           → strategies（大类 / 策略）· deployments + strategy_catalog（内部接口部署金额）
 ```
 
 `collector.py` 与 Claude 看板里的采集脚本口径一致，在此基础上增加了：

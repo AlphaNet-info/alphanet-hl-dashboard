@@ -10,7 +10,7 @@
 
 AlphaNet 规则：一个账户的一个币种只部署一个策略，所以「地址 × 币种」= 一个部署组合。
 策略来源优先级（高 → 低）：
-  1. 内部部署接口   环境变量 ALPHANET_DEPLOYMENTS_URL（+ 可选 ALPHANET_API_TOKEN），字段映射见 strategies.json 的 api_fields
+  1. 内部接口（Internal-API-Key，环境变量 ALPHANET_API_KEY）只提供部署金额 / 起止 / 状态，见 alphanet_api.py；字段映射见 strategies.json 的 api_fields
   2. 手动映射       pipeline/strategies.json 的 deployments
   3. 自动推断       同一策略会在多个钱包上同时下单 —— 按「成交分钟 + 方向」的重合度（Jaccard）聚类，
                     同一币种里重合度高的组合归为同一个推断策略（如 XMR-A、XMR-B）
@@ -21,6 +21,8 @@ AlphaNet 规则：一个账户的一个币种只部署一个策略，所以「�
 输出 data/strategies.json
 """
 import argparse, json, os, sys, time, datetime as dt, urllib.request, itertools
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import alphanet_api
 
 DAY = 86400000
 WINDOW_DAYS = 21          # 推断用的成交窗口
@@ -59,40 +61,6 @@ def jaccard(a, b):
     if not a or not b: return 0.0
     i = len(a & b)
     return i / (len(a) + len(b) - i)
-
-
-def fetch_api(cfg):
-    url = os.environ.get("ALPHANET_DEPLOYMENTS_URL") or cfg.get("api_url")
-    if not url:
-        return None, "未配置"
-    headers = {"Accept": "application/json"}
-    tok = os.environ.get("ALPHANET_API_TOKEN")
-    if tok:
-        h = cfg.get("api_auth_header") or "Authorization"
-        headers[h] = (cfg.get("api_auth_prefix", "Bearer ") + tok) if h == "Authorization" else tok
-    try:
-        req = urllib.request.Request(url, headers=headers)
-        with urllib.request.urlopen(req, timeout=60) as r:
-            body = json.loads(r.read())
-    except Exception as e:
-        return None, f"接口请求失败：{e}"
-    rows = body
-    for k in ("data", "rows", "results", "items", "deployments"):
-        if isinstance(rows, dict) and k in rows: rows = rows[k]
-    if not isinstance(rows, list):
-        return None, "接口返回格式无法识别"
-    F = {"addr": "address", "coin": "asset", "strategy": "strategy", "family": "family", "name": "name", "usdc": "usdc",
-         "start": "start", "stop": "stop", "status": "status"}
-    F.update(cfg.get("api_fields") or {})
-    out = []
-    for r in rows:
-        g = lambda k: r.get(F[k]) if isinstance(r, dict) else None
-        if not g("addr") or not g("coin") or not g("strategy"): continue
-        out.append({"addr": str(g("addr")).lower(), "coin": norm_coin(g("coin")), "strategy": str(g("strategy")), "family": g("family") if F.get("family") else None,
-                    "usdc": float(g("usdc")) if g("usdc") not in (None, "") else None,
-                    "start": str(g("start"))[:10] if g("start") else None, "stop": str(g("stop"))[:10] if g("stop") else None,
-                    "status": g("status"), "name": g("name")})
-    return out, f"接口返回 {len(out)} 条部署"
 
 
 def main():
@@ -174,12 +142,16 @@ def main():
 
     # ---- manual + api overrides ----
     manual = {f'{d["addr"].lower()}|{norm_coin(d["coin"])}': d for d in (cfg.get("deployments") or []) if d.get("addr") and d.get("coin")}
-    api_rows, api_msg = fetch_api(cfg)
+    api_rows, catalog, api_msg = alphanet_api.fetch(cfg)
     api = {}
-    for d in api_rows or []:
+    for d in api_rows:
         k = f'{d["addr"]}|{d["coin"]}'
-        if k not in api or (d.get("start") or "") > (api[k].get("start") or ""): api[k] = d   # latest deployment wins
-        combos.setdefault(k, {"addr": d["addr"], "coin": d["coin"], "first": None, "last": None})
+        cur = api.get(k)
+        live = lambda x: not x.get("stop")
+        # 同一组合多条部署：优先仍在运行的，其次最近开始的
+        if cur is None or (live(d), d.get("start") or "") > (live(cur), cur.get("start") or ""): api[k] = d
+        if d["addr"] in addrs:
+            combos.setdefault(k, {"addr": d["addr"], "coin": d["coin"], "first": None, "last": None})
     fams = cfg.get("families") or [{"name": "Hackworth", "coins": "*", "prefix": "Hackworth"}]
 
     def by_rule(coin):
@@ -197,9 +169,9 @@ def main():
         if k in manual:
             m = manual[k]; src = "映射"; sid = m.get("strategy") or sid; fam = m.get("family") or fam
             extra = {x: m.get(x) for x in ("usdc", "start", "stop", "status") if m.get(x) is not None}
-        if k in api:
-            m = api[k]; src = "接口"; sid = m["strategy"] or sid; fam = m.get("family") or fam_of_strategy.get(sid) or fam
-            extra = {x: m.get(x) for x in ("usdc", "start", "stop", "status") if m.get(x) is not None}
+        if k in api:   # 接口只提供金额 / 起止 / 状态；大类和策略仍按币种规则（Archimedes PI / Archimedes / Hackworth）
+            m = api[k]; src = "接口"
+            extra = {x: m.get(x) for x in ("usdc", "start", "stop", "status", "api_strategy", "id") if m.get(x) is not None}
         fam_of_strategy.setdefault(sid, fam)
         out.append({"key": k, "addr": c["addr"], "coin": c["coin"], "family": fam, "strategy": sid, "name": sid,
                     "source": src, "signal_group": inferred.get(k, ""), "first": c["first"], "last": c["last"],
@@ -208,20 +180,32 @@ def main():
 
     # ---- 部署金额明细（接口优先，否则手动映射）：每条部署一行，含起止时间，前端据此算任意一天的部署金额 ----
     dep_rows = []
-    src_rows = (api_rows or []) if api_rows else [dict(d, addr=d["addr"].lower(), coin=norm_coin(d["coin"])) for d in (cfg.get("deployments") or []) if d.get("addr") and d.get("coin")]
+    src_rows = api_rows if api_rows else [dict(d, addr=d["addr"].lower(), coin=norm_coin(d["coin"])) for d in (cfg.get("deployments") or []) if d.get("addr") and d.get("coin")]
     for d in src_rows:
         if d.get("usdc") in (None, ""): continue
         fam, sid = by_rule(d["coin"])
-        dep_rows.append({"addr": d["addr"], "coin": d["coin"], "family": d.get("family") or fam_of_strategy.get(d.get("strategy")) or fam,
-                         "strategy": d.get("strategy") or sid, "usdc": float(d["usdc"]), "start": (d.get("start") or None) and str(d["start"])[:10],
+        dep_rows.append({"id": d.get("id"), "addr": d["addr"], "coin": d["coin"], "family": fam, "strategy": sid,
+                         "api_strategy": d.get("api_strategy") or d.get("strategy"), "watched": d["addr"] in addrs,
+                         "usdc": float(d["usdc"]), "start": (d.get("start") or None) and str(d["start"])[:10],
                          "stop": (d.get("stop") or None) and str(d["stop"])[:10], "status": d.get("status"),
                          "source": "接口" if api_rows else "映射"})
     dump(os.path.join(args.data, "deployments.json"), dep_rows)
+
+    # ---- 策略目录（/internal/v1/strategies）：策略级部署金额，映射到 大类 + 币种 ----
+    cat_rows = []
+    for c in catalog:
+        coin = c.get("coin")
+        if not coin and c.get("api_strategy"):
+            coin = alphanet_api.norm_coin(str(c["api_strategy"]).split()[-1])
+        fam, sid = by_rule(coin) if coin else ("未分类", str(c.get("api_strategy")))
+        cat_rows.append({"family": fam, "strategy": sid, "coin": coin, "api_strategy": c.get("api_strategy"), "api_family": c.get("api_family"),
+                         "usdc": c.get("usdc"), "count": c.get("count"), "status": c.get("status"), "raw_keys": c.get("raw_keys")})
+    dump(os.path.join(args.data, "strategy_catalog.json"), cat_rows)
     res = {
         "generated_at": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "method": {"window_days": WINDOW_DAYS, "min_signals": MIN_SIGNALS, "link": LINK,
                    "note": "同一策略会在多个钱包同时下单；按成交分钟 + 方向的重合度（Jaccard）做平均链接聚类"},
-        "api": api_msg, "manual": len(manual), "families": fams, "deployments": len(dep_rows),
+        "api": api_msg, "manual": len(manual), "families": fams, "deployments": len(dep_rows), "catalog": len(cat_rows),
         "groups": groups, "combos": out,
     }
     dump(os.path.join(args.data, "strategies.json"), res)
