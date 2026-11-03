@@ -1,6 +1,10 @@
 {
-  "_说明": "策略配置。优先级：内部接口 > deployments 手动映射 > 自动推断。names 用来给自动推断出的策略组起名（键为看板上显示的推断 ID，如 XMR-A）。",
-  "names": {},
+  "_说明": "策略分类配置。按币种归类，不按地址。优先级：内部接口 > deployments 手动指定 > families 币种规则。",
+  "families": [
+    { "name": "Archimedes PI", "coins": ["ZEC", "XMR"], "prefix": "Archimedes" },
+    { "name": "Archimedes", "coins": ["BNB", "SOL", "ETH", "DOGE"], "prefix": "Archimedes" },
+    { "name": "Hackworth", "coins": "*", "prefix": "Hackworth" }
+  ],
   "deployments": [],
   "api_url": "",
   "api_auth_header": "Authorization",
@@ -9,6 +13,7 @@
     "addr": "address",
     "coin": "asset",
     "strategy": "strategy",
+    "family": "family",
     "name": "name",
     "usdc": "usdc",
     "start": "start",

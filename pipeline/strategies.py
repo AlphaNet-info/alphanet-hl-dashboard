@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""策略识别：把每个「地址 × 币种」组合归到一个策略。
+"""策略分类：把每个「地址 × 币种」部署组合归到 大类 → 策略。
+
+分类按币种（families 规则），不按地址：
+  Archimedes PI = Archimedes ZEC / Archimedes XMR
+  Archimedes    = Archimedes BNB / SOL / ETH / DOGE
+  Hackworth     = 其余所有币种（Hackworth <币种>）
+另外仍计算「信号组」（同一币种里同步下单的地址），只作为部署明细里的参考列。
+
 
 AlphaNet 规则：一个账户的一个币种只部署一个策略，所以「地址 × 币种」= 一个部署组合。
 策略来源优先级（高 → 低）：
@@ -74,14 +81,14 @@ def fetch_api(cfg):
         if isinstance(rows, dict) and k in rows: rows = rows[k]
     if not isinstance(rows, list):
         return None, "接口返回格式无法识别"
-    F = {"addr": "address", "coin": "asset", "strategy": "strategy", "name": "name", "usdc": "usdc",
+    F = {"addr": "address", "coin": "asset", "strategy": "strategy", "family": "family", "name": "name", "usdc": "usdc",
          "start": "start", "stop": "stop", "status": "status"}
     F.update(cfg.get("api_fields") or {})
     out = []
     for r in rows:
         g = lambda k: r.get(F[k]) if isinstance(r, dict) else None
         if not g("addr") or not g("coin") or not g("strategy"): continue
-        out.append({"addr": str(g("addr")).lower(), "coin": norm_coin(g("coin")), "strategy": str(g("strategy")),
+        out.append({"addr": str(g("addr")).lower(), "coin": norm_coin(g("coin")), "strategy": str(g("strategy")), "family": g("family") if F.get("family") else None,
                     "usdc": float(g("usdc")) if g("usdc") not in (None, "") else None,
                     "start": str(g("start"))[:10] if g("start") else None, "stop": str(g("stop"))[:10] if g("stop") else None,
                     "status": g("status"), "name": g("name")})
@@ -173,30 +180,36 @@ def main():
         k = f'{d["addr"]}|{d["coin"]}'
         if k not in api or (d.get("start") or "") > (api[k].get("start") or ""): api[k] = d   # latest deployment wins
         combos.setdefault(k, {"addr": d["addr"], "coin": d["coin"], "first": None, "last": None})
-    names = cfg.get("names") or {}           # {"XMR-A": "Hackworth OptimaLong"} 给推断出的策略起名
+    fams = cfg.get("families") or [{"name": "Hackworth", "coins": "*", "prefix": "Hackworth"}]
 
+    def by_rule(coin):
+        for f in fams:
+            if f.get("coins") == "*" or coin in (f.get("coins") or []):
+                return f["name"], f"{f.get('prefix') or f['name']} {coin}"
+        return "未分类", coin
+
+    fam_of_strategy = {}
     out = []
     for k, c in combos.items():
         if c["addr"] not in addrs: continue
-        src, sid, extra = "推断", inferred.get(k), {}
-        if not sid and k in prev:
-            sid = prev[k]["strategy"]; src = prev[k].get("source", "推断")
-        if not sid:
-            sid = f'{c["coin"]}-独立-{c["addr"][2:6]}'
+        fam, sid = by_rule(c["coin"])
+        src, extra = "规则", {}
         if k in manual:
-            m = manual[k]; src, sid = "映射", m["strategy"]
+            m = manual[k]; src = "映射"; sid = m.get("strategy") or sid; fam = m.get("family") or fam
             extra = {x: m.get(x) for x in ("usdc", "start", "stop", "status") if m.get(x) is not None}
         if k in api:
-            m = api[k]; src, sid = "接口", m["strategy"]
+            m = api[k]; src = "接口"; sid = m["strategy"] or sid; fam = m.get("family") or fam_of_strategy.get(sid) or fam
             extra = {x: m.get(x) for x in ("usdc", "start", "stop", "status") if m.get(x) is not None}
-        out.append({"key": k, "addr": c["addr"], "coin": c["coin"], "strategy": sid, "name": names.get(sid, sid),
-                    "source": src, "first": c["first"], "last": c["last"], "signals_21d": len(sets.get(k, ())), **extra})
-    out.sort(key=lambda r: (r["strategy"], r["addr"]))
+        fam_of_strategy.setdefault(sid, fam)
+        out.append({"key": k, "addr": c["addr"], "coin": c["coin"], "family": fam, "strategy": sid, "name": sid,
+                    "source": src, "signal_group": inferred.get(k, ""), "first": c["first"], "last": c["last"],
+                    "signals_21d": len(sets.get(k, ())), **extra})
+    out.sort(key=lambda r: (r["family"], r["strategy"], r["addr"]))
     res = {
         "generated_at": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "method": {"window_days": WINDOW_DAYS, "min_signals": MIN_SIGNALS, "link": LINK,
                    "note": "同一策略会在多个钱包同时下单；按成交分钟 + 方向的重合度（Jaccard）做平均链接聚类"},
-        "api": api_msg, "manual": len(manual),
+        "api": api_msg, "manual": len(manual), "families": fams,
         "groups": groups, "combos": out,
     }
     dump(os.path.join(args.data, "strategies.json"), res)
