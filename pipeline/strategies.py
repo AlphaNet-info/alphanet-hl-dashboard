@@ -205,11 +205,23 @@ def main():
                     "source": src, "signal_group": inferred.get(k, ""), "first": c["first"], "last": c["last"],
                     "signals_21d": len(sets.get(k, ())), **extra})
     out.sort(key=lambda r: (r["family"], r["strategy"], r["addr"]))
+
+    # ---- 部署金额明细（接口优先，否则手动映射）：每条部署一行，含起止时间，前端据此算任意一天的部署金额 ----
+    dep_rows = []
+    src_rows = (api_rows or []) if api_rows else [dict(d, addr=d["addr"].lower(), coin=norm_coin(d["coin"])) for d in (cfg.get("deployments") or []) if d.get("addr") and d.get("coin")]
+    for d in src_rows:
+        if d.get("usdc") in (None, ""): continue
+        fam, sid = by_rule(d["coin"])
+        dep_rows.append({"addr": d["addr"], "coin": d["coin"], "family": d.get("family") or fam_of_strategy.get(d.get("strategy")) or fam,
+                         "strategy": d.get("strategy") or sid, "usdc": float(d["usdc"]), "start": (d.get("start") or None) and str(d["start"])[:10],
+                         "stop": (d.get("stop") or None) and str(d["stop"])[:10], "status": d.get("status"),
+                         "source": "接口" if api_rows else "映射"})
+    dump(os.path.join(args.data, "deployments.json"), dep_rows)
     res = {
         "generated_at": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "method": {"window_days": WINDOW_DAYS, "min_signals": MIN_SIGNALS, "link": LINK,
                    "note": "同一策略会在多个钱包同时下单；按成交分钟 + 方向的重合度（Jaccard）做平均链接聚类"},
-        "api": api_msg, "manual": len(manual), "families": fams,
+        "api": api_msg, "manual": len(manual), "families": fams, "deployments": len(dep_rows),
         "groups": groups, "combos": out,
     }
     dump(os.path.join(args.data, "strategies.json"), res)

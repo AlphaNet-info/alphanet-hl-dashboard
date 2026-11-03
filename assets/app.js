@@ -3,7 +3,7 @@
 'use strict';
 
 const API = 'https://api.hyperliquid.xyz/info';
-const FILES = ['meta', 'daily_total', 'addr_daily', 'addr_summary', 'positions', 'alerts', 'alert_rules', 'coin_daily', 'exposure_daily', 'health', 'run_log', 'strategies'];
+const FILES = ['meta', 'daily_total', 'addr_daily', 'addr_summary', 'positions', 'alerts', 'alert_rules', 'coin_daily', 'exposure_daily', 'health', 'run_log', 'strategies', 'deployments'];
 const VIEWS = {
   overview: { t: '公司总览', s: '公司整体经营：资金规模、盈亏、交易量与成本' },
   weekly:   { t: '周报 / 月报', s: '按 ISO 周（周一至周日）与自然月汇总，UTC 口径' },
@@ -75,12 +75,31 @@ function prep(D) {
   const ST = D.strategies || { combos: [] };
   S.stratMeta = ST;
   S.strat = Object.fromEntries((ST.combos || []).map(c => [c.addr + '|' + c.coin, c]));
+  S.deps = (D.deployments || []).filter(d => d.usdc != null);
+  S.hasDep = S.deps.length > 0;
+  S.today = new Date().toISOString().slice(0, 10);
   applyLive();
 }
 
 function rangeDays() {
   return S.range && S.days.length > S.range ? S.days.slice(-S.range) : S.days.slice();
 }
+
+/* ---------- deployed amount (内部部署接口) ---------- */
+const STOPPED = /stop|inactive|ended|closed|cancel|停止|结束|已停/i;
+function depActive(d, day) {
+  if (d.start && d.start > day) return false;
+  if (d.stop) return day < d.stop;
+  if (d.status && STOPPED.test(String(d.status))) return day < S.today;
+  return true;
+}
+const depOn = (day, f = () => true) => sum(S.deps.filter(d => f(d) && depActive(d, day)), d => d.usdc);
+const depNow = (f = () => true) => depOn(S.today, f);
+const depAvg = (days, f = () => true) => days.length ? sum(days, d => depOn(d, f)) / days.length : 0;
+const byAddr = a => d => d.addr === a;
+const NA_DEP = '<span class="muted" title="部署金额来自内部部署接口，尚未接入">—</span>';
+const depCell = v => S.hasDep ? usd(v) : NA_DEP;
+const depKpi = (v, sub) => kpi('部署金额', S.hasDep ? usd(v) : '<span class="muted">—</span>', S.hasDep ? sub : '待接入内部部署接口', '内部部署接口的部署 USDC 合计（当前生效的部署）');
 
 /* ---------- live refresh ---------- */
 function posFromState(a, st, eqNow) {
@@ -322,6 +341,7 @@ function vOverview() {
   const html = `
   <div class="kpis">
     ${kpi('账户总资金', usd(last.equity), `较前日 ${sp(prev ? last.equity - prev.equity : 0)} · ${rlab}净流入 ${sp(flow)}`)}
+    ${depKpi(depNow(), `资金利用率 ${pct(last.equity ? depNow() / last.equity : 0, 0)} · 较${rlab}初 ${sp(depNow() - depOn(R[0].day))}`)}
     ${kpi(`${rlab}官方盈亏`, sp(pnl), `收益率 ${spp(roi)}`, '官方口径 = Hyperliquid portfolio 的盈亏历史，含持仓浮动盈亏变化')}
     ${kpi(`昨日盈亏 · ${last.day.slice(5)}`, sp(last.pnl_day), `占前日资金 ${spp(last.pnl_pct, 3)}`)}
     ${kpi(`${rlab}交易量`, usd(vol), `日均 ${usd(vol / R.length)} · 累计 ${usd(last.volume_cum)}`)}
@@ -333,7 +353,7 @@ function vOverview() {
     ${kpi('盈利 / 亏损天数', `<span class="pos">${win}</span> <span class="muted">/</span> <span class="neg">${loss}</span>`, `日胜率 ${pct(win / Math.max(1, win + loss), 0)}`)}
   </div>
   <div class="grid g2">
-    ${card('资金规模', '所有监控地址的日终账户资金合计', chartBox('c-eq'))}
+    ${card('资金规模与部署金额', S.hasDep ? '账户资金（日终）与内部接口的部署金额' : '所有监控地址的日终账户资金合计；部署金额待接入内部接口', (S.hasDep ? legend([[css('--s1'), '账户资金'], [css('--s2'), '部署金额']]) : '') + chartBox('c-eq'))}
     ${card(`累计官方盈亏 · ${rlab}`, '从区间第一天起逐日累计', chartBox('c-cum'))}
   </div>
   <div class="grid g2">
@@ -365,7 +385,7 @@ function vOverview() {
   </div>`;
   const after = () => {
     const L = R.map(r => shortDay(r.day));
-    mk('c-eq', 'line', L, [lineDs('资金', R.map(r => r.equity), css('--s1'), true)], { zero: false });
+    mk('c-eq', 'line', L, [lineDs('账户资金', R.map(r => r.equity), css('--s1'), true)].concat(S.hasDep ? [lineDs('部署金额', R.map(r => depOn(r.day)), css('--s2'))] : []), { zero: false });
     let c = 0; const cum = R.map(r => (c += r.pnl_day));
     mk('c-cum', 'line', L, [{ ...lineDs('累计盈亏', cum, css('--s1'), true), segment: { borderColor: x => x.p1.parsed.y < 0 ? css('--neg') : css('--pos') } }], { zero: false });
     const pd = R.map(r => r.pnl_day);
@@ -401,6 +421,7 @@ function vWeekly() {
     { k: 'funding', t: '资金费', n: 1, f: r => sp(r.funding) },
     { k: 'net_flow', t: '净流入', n: 1, f: r => sp(r.net_flow) },
     { k: 'end_eq', t: '期末资金', n: 1, f: r => usd(r.end_eq) },
+    { k: 'end_dep', t: '期末部署', n: 1, v: r => depOn(r.days[r.days.length - 1]), f: r => depCell(depOn(r.days[r.days.length - 1])) },
     { k: 'active', t: '活跃地址', n: 1 },
     { k: 'win', t: '盈/亏天', n: 1, f: r => `<span class="pos">${r.win}</span>/<span class="neg">${r.loss}</span>` },
   ];
@@ -413,6 +434,7 @@ function vWeekly() {
     ${kpi('周交易量', usd(sel.volume), prevW ? `环比 ${spp(d(sel.volume, prevW.volume), 1)}` : '')}
     ${kpi('周官方盈亏', sp(sel.pnl), `收益率 ${spp(sel.ret)}${prevW ? ` · 上周 ${sp(prevW.pnl)}` : ''}`)}
     ${kpi('资金变动', sp(sel.end_eq - sel.start_eq), `期初 ${usd(sel.start_eq)} → 期末 ${usd(sel.end_eq)}`)}
+    ${depKpi(depOn(sel.days[sel.days.length - 1]), `期初 ${usd(depOn(sel.days[0]))} → 期末 ${usd(depOn(sel.days[sel.days.length - 1]))}`)}
     ${kpi('净流入', sp(sel.net_flow), '入金 − 出金')}
     ${kpi('活跃地址', `${sel.active} / ${S.addrs.length}`, prevW ? `上周 ${prevW.active}` : '')}
     ${kpi('手续费', usd(sel.fees), `${(sel.volume ? sel.fees / sel.volume * 1e4 : 0).toFixed(2)} bps`)}
@@ -421,7 +443,7 @@ function vWeekly() {
     ${card('当周每日', '', table('wk-d', [
       { k: 'day', t: '日期' }, { k: 'volume', t: '交易量', n: 1, f: r => usd(r.volume) }, { k: 'pnl_day', t: '官方盈亏', n: 1, f: r => sp(r.pnl_day) },
       { k: 'pnl_pct', t: '收益率', n: 1, f: r => spp(r.pnl_pct, 3) }, { k: 'net_flow', t: '净流入', n: 1, f: r => sp(r.net_flow) },
-      { k: 'active_addrs', t: '活跃地址', n: 1 }, { k: 'equity', t: '日终资金', n: 1, f: r => usd(r.equity) }], D, { sort: 'day', asc: true }))}
+      { k: 'active_addrs', t: '活跃地址', n: 1 }, { k: 'equity', t: '日终资金', n: 1, f: r => usd(r.equity) }, { k: 'dep', t: '部署金额', n: 1, v: r => depOn(r.day), f: r => depCell(depOn(r.day)) }], D, { sort: 'day', asc: true }))}
     ${card('当周币种', '按成交额排序', table('wk-c', [
       { k: 'coin', t: '币种', f: r => `<b>${esc(r.coin)}</b>` }, { k: 'volume', t: '交易量', n: 1, f: r => usd(r.volume) },
       { k: 'net', t: '交易净盈亏', n: 1, f: r => sp(r.net) }, { k: 'n_addrs', t: '地址数', n: 1 }], C, { sort: 'volume', limit: 10 }))}
@@ -452,7 +474,7 @@ function vOps() {
     let idle = 0; for (let i = rows.length - 1; i >= 0 && rows[i].fills === 0; i--) idle++;
     return { addr: a.addr, label: a.label, group: a.group, status: s.status || '—', first: s.first_trade, last: s.last_trade, added: a.added,
       volume: g.volume, fills: g.fills, fees: g.fees, active_days: g.active_days, days: g.days, idle, equity: s.equity_now || 0,
-      bps: g.volume ? g.fees / g.volume * 1e4 : 0, turnover: s.equity_now > 1 ? g.volume / s.equity_now / Math.max(1, g.days) : 0 };
+      bps: g.volume ? g.fees / g.volume * 1e4 : 0, dep: depNow(byAddr(a.addr)), turnover: s.equity_now > 1 ? g.volume / s.equity_now / Math.max(1, g.days) : 0 };
   });
   const totVol = sum(list, x => x.volume);
   list.forEach(x => x.share = totVol ? x.volume / totVol : 0);
@@ -463,11 +485,11 @@ function vOps() {
   const idleAddr = list.filter(x => x.idle >= 3 || x.status === '闲置');
   const tiers = [['< $1K', 0, 1e3], ['$1K – 10K', 1e3, 1e4], ['$10K – 100K', 1e4, 1e5], ['≥ $100K', 1e5, Infinity]].map(([t, lo, hi]) => {
     const xs = list.filter(x => x.equity >= lo && x.equity < hi);
-    return { t, n: xs.length, eq: sum(xs, x => x.equity), vol: sum(xs, x => x.volume) };
+    return { t, n: xs.length, eq: sum(xs, x => x.equity), dep: sum(xs, x => x.dep), vol: sum(xs, x => x.volume) };
   });
   const totEq = sum(tiers, t => t.eq);
   const top5share = sum(list.slice().sort((a, b) => b.volume - a.volume).slice(0, 5), x => x.share);
-  const groups = {}; list.forEach(x => { const g = groups[x.group] ||= { group: x.group, n: 0, volume: 0, equity: 0, active: 0 }; g.n++; g.volume += x.volume; g.equity += x.equity; if (x.active_days) g.active++; });
+  const groups = {}; list.forEach(x => { const g = groups[x.group] ||= { group: x.group, n: 0, volume: 0, equity: 0, dep: 0, active: 0 }; g.n++; g.volume += x.volume; g.equity += x.equity; g.dep += x.dep; if (x.active_days) g.active++; });
   const statusCnt = {}; list.forEach(x => statusCnt[x.status] = (statusCnt[x.status] || 0) + 1);
 
   const html = `
@@ -495,12 +517,12 @@ function vOps() {
   </div>
   <div class="grid g3">
     ${card('资金分层', '按当前账户资金', table('o-tier', [{ k: 't', t: '层级', nosort: 1 }, { k: 'n', t: '地址数', n: 1, nosort: 1 },
-      { k: 'eq', t: '资金', n: 1, nosort: 1, f: r => usd(r.eq) }, { k: 'p', t: '资金占比', n: 1, nosort: 1, f: r => pct(totEq ? r.eq / totEq : 0, 1) },
+      { k: 'eq', t: '资金', n: 1, nosort: 1, f: r => usd(r.eq) }, { k: 'dep', t: '部署金额', n: 1, nosort: 1, f: r => depCell(r.dep) }, { k: 'p', t: '资金占比', n: 1, nosort: 1, f: r => pct(totEq ? r.eq / totEq : 0, 1) },
       { k: 'vol', t: '区间交易量', n: 1, nosort: 1, f: r => usd(r.vol) }], tiers))}
     ${card('地址状态', '基于最近一个完整日', table('o-st', [{ k: 's', t: '状态', nosort: 1 }, { k: 'n', t: '地址数', n: 1, nosort: 1 }],
       Object.entries(statusCnt).map(([s, n]) => ({ s, n }))))}
     ${card('分组', '在 watchlist.json 中给地址加 "group" 字段即可分组', table('o-grp', [{ k: 'group', t: '分组' }, { k: 'n', t: '地址', n: 1 },
-      { k: 'active', t: '活跃', n: 1 }, { k: 'equity', t: '资金', n: 1, f: r => usd(r.equity) }, { k: 'volume', t: '交易量', n: 1, f: r => usd(r.volume) }], Object.values(groups), { sort: 'equity' }))}
+      { k: 'active', t: '活跃', n: 1 }, { k: 'equity', t: '资金', n: 1, f: r => usd(r.equity) }, { k: 'dep', t: '部署金额', n: 1, f: r => depCell(r.dep) }, { k: 'volume', t: '交易量', n: 1, f: r => usd(r.volume) }], Object.values(groups), { sort: 'equity' }))}
   </div>
   ${card('地址运营明细', '区间口径；点击地址进入详情', table('o-list', [
     { k: 'label', t: '地址', f: r => `<a href="#address/${r.addr}">${esc(r.label)}</a>` },
@@ -515,7 +537,7 @@ function vOps() {
     { k: 'turnover', t: '日均换手', n: 1, f: r => r.turnover.toFixed(2) + 'x', tip: '日均交易量 ÷ 当前资金' },
     { k: 'fees', t: '手续费', n: 1, f: r => usd(r.fees) },
     { k: 'bps', t: '费率', n: 1, f: r => r.bps ? r.bps.toFixed(2) + ' bps' : '—' },
-    { k: 'equity', t: '资金', n: 1, f: r => usd(r.equity) }], list, { sort: 'volume' }))}`;
+    { k: 'equity', t: '资金', n: 1, f: r => usd(r.equity) }, { k: 'dep', t: '部署金额', n: 1, f: r => depCell(r.dep) }], list, { sort: 'volume' }))}`;
   const after = () => {
     const L = R.map(r => shortDay(r.day));
     mk('o-act', 'bar', L, [barDs('活跃地址', R.map(r => r.active_addrs), css('--s1'))], { fmt: v => Math.round(v), tipFmt: v => v + ' 个' });
@@ -549,6 +571,7 @@ function vAddress(param) {
       { k: 'label', t: '地址', f: r => `<b>${esc(r.label)}</b>`, v: r => +(r.label.match(/#(\d+)/)?.[1] || 999) },
       { k: 'alert_level', t: '预警', f: r => r.alert_count ? chip(r.alert_level, `${r.alert_level} ${r.alert_count}`) : chip('正常'), v: r => ({ '严重': 3, '警告': 2, '提示': 1 }[r.alert_level] || 0) },
       { k: 'equity_now', t: '资金', n: 1, f: r => usd(r.equity_now) },
+      { k: 'dep', t: '部署金额', n: 1, v: r => depNow(byAddr(r.addr)), f: r => depCell(depNow(byAddr(r.addr))) },
       { k: 'rp', t: '区间盈亏', n: 1, f: r => sp(r.r.pnl), v: r => r.r.pnl },
       { k: 'rr', t: '收益率', n: 1, f: r => spp(r.r.roi), v: r => r.r.roi },
       { k: 'pnl_day', t: '昨日盈亏', n: 1, f: r => sp(r.pnl_day) },
@@ -591,6 +614,7 @@ function addrDetail(days) {
   ${AL.length ? `<div class="checks">${AL.map(x => `<div class="check"><span class="ic ${LV[x.level]}">!</span><div>${chip(x.level, x.rule)} ${esc(x.message)}</div></div>`).join('')}</div>` : ''}
   <div class="kpis">
     ${kpi('资金', usd(s.equity_now), `较前日 ${sp(s.equity_change_day)}`)}
+    ${depKpi(depNow(byAddr(a)), [...new Set(S.deps.filter(d => d.addr === a && depActive(d, S.today)).map(d => d.coin))].join(' / ') + ` · 利用率 ${pct(s.equity_now ? depNow(byAddr(a)) / s.equity_now : 0, 0)}`)}
     ${kpi('区间官方盈亏', sp(g.pnl), `收益率 ${spp(g.roi)}`)}
     ${kpi('本期累计盈亏', sp(s.pnl_period), `收益率 ${spp(s.pnl_period_pct)}`)}
     ${kpi('区间交易量', usd(g.volume), `手续费 ${usd(g.fees)}`)}
@@ -600,11 +624,11 @@ function addrDetail(days) {
     ${kpi('最大回撤', usd(s.max_drawdown), `当前 ${pct(s.drawdown_pct, 1)}`)}
   </div>
   <div class="grid g2">
-    ${card('资金曲线', '', chartBox('d-eq', 'short'))}
+    ${card(S.hasDep ? '资金与部署金额' : '资金曲线', '', (S.hasDep ? legend([[css('--s1'), '账户资金'], [css('--s2'), '部署金额']]) : '') + chartBox('d-eq', 'short'))}
     ${card('每日官方盈亏', '', chartBox('d-pnl', 'short'))}
   </div>
   <div class="grid g2">
-    ${card('币种贡献', '区间成交口径', table('d-coin', [{ k: 'coin', t: '币种', f: r => `<b>${esc(r.coin)}</b>` }, { k: 'st', t: '策略', v: r => stratOf(a, r.coin).strategy, f: r => { const c = stratOf(a, r.coin); return `<a href="#strategy/${encodeURIComponent(c.strategy)}">${esc(c.name || c.strategy)}</a>`; } }, { k: 'volume', t: '交易量', n: 1, f: r => usd(r.volume) },
+    ${card('币种贡献', '区间成交口径', table('d-coin', [{ k: 'coin', t: '币种', f: r => `<b>${esc(r.coin)}</b>` }, { k: 'st', t: '策略', v: r => stratOf(a, r.coin).strategy, f: r => { const c = stratOf(a, r.coin); return `<a href="#strategy/${encodeURIComponent(c.strategy)}">${esc(c.name || c.strategy)}</a>`; } }, { k: 'dep', t: '部署金额', n: 1, v: r => depNow(d => d.addr === a && d.coin === r.coin), f: r => depCell(depNow(d => d.addr === a && d.coin === r.coin)) }, { k: 'volume', t: '交易量', n: 1, f: r => usd(r.volume) },
       { k: 'fills', t: '笔数', n: 1, f: r => int(r.fills) }, { k: 'realized_pnl', t: '已实现', n: 1, f: r => sp(r.realized_pnl) }, { k: 'fees', t: '手续费', n: 1, f: r => usd(r.fees) },
       { k: 'net', t: '净盈亏', n: 1, f: r => sp(r.net) }], coins, { sort: 'volume' }))}
     ${card('当前持仓', S.live ? '实时' : '最近快照', posTable('d-pos', P, true))}
@@ -612,9 +636,9 @@ function addrDetail(days) {
   ${card('每日明细', '', table('d-daily', [{ k: 'day', t: '日期' }, { k: 'volume', t: '交易量', n: 1, f: r => usd(r.volume) }, { k: 'fills', t: '笔数', n: 1 },
     { k: 'realized_pnl', t: '已实现', n: 1, f: r => sp(r.realized_pnl) }, { k: 'fees', t: '手续费', n: 1, f: r => usd(r.fees) }, { k: 'funding', t: '资金费', n: 1, f: r => sp(r.funding) },
     { k: 'pnl_day', t: '官方盈亏', n: 1, f: r => sp(r.pnl_day) }, { k: 'pnl_pct', t: '收益率', n: 1, f: r => spp(r.pnl_pct, 3) },
-    { k: 'equity', t: '日终资金', n: 1, f: r => usd(r.equity) }, { k: 'net_flow', t: '净流入', n: 1, f: r => sp(r.net_flow) }], R, { sort: 'day', scroll: 1 }))}`;
+    { k: 'equity', t: '日终资金', n: 1, f: r => usd(r.equity) }, { k: 'dep', t: '部署金额', n: 1, v: r => depOn(r.day, byAddr(a)), f: r => depCell(depOn(r.day, byAddr(a))) }, { k: 'net_flow', t: '净流入', n: 1, f: r => sp(r.net_flow) }], R, { sort: 'day', scroll: 1 }))}`;
   const L = R.map(r => shortDay(r.day));
-  mk('d-eq', 'line', L, [lineDs('资金', R.map(r => r.equity), css('--s1'), true)], { zero: false });
+  mk('d-eq', 'line', L, [lineDs('账户资金', R.map(r => r.equity), css('--s1'), true)].concat(S.hasDep ? [lineDs('部署金额', R.map(r => depOn(r.day, byAddr(a))), css('--s2'))] : []), { zero: false });
   const pd = R.map(r => r.pnl_day);
   mk('d-pnl', 'bar', L, [{ ...barDs('官方盈亏', pd), backgroundColor: pnColors(pd) }]);
   bindSort(box);
@@ -627,6 +651,7 @@ function posTable(id, P, compact) {
     { k: 'strat', t: '策略', v: r => stratOf(r.addr, r.coin).strategy, f: r => { const c = stratOf(r.addr, r.coin); return `<a href="#strategy/${encodeURIComponent(c.strategy)}">${esc(c.name || c.strategy)}</a>`; } },
     { k: 'side', t: '方向', f: r => `<span class="chip ${r.side === '多' ? 'ok' : 'crit'}">${r.side}</span>` },
     { k: 'notional', t: '名义价值', n: 1, f: r => usd(r.notional) },
+    { k: 'dep', t: '部署金额', n: 1, v: r => depNow(d => d.addr === r.addr && d.coin === r.coin), f: r => depCell(depNow(d => d.addr === r.addr && d.coin === r.coin)) },
     { k: 'entry_px', t: '开仓价', n: 1, f: r => (+r.entry_px).toPrecision(6) },
     { k: 'mark_px', t: '标记价', n: 1, f: r => (+r.mark_px).toPrecision(6) },
     { k: 'unrealized_pnl', t: '浮动盈亏', n: 1, f: r => sp(r.unrealized_pnl) },
@@ -708,6 +733,7 @@ function vRisk() {
     ${kpi('最近强平距离', liq ? `<span class="${liq.liq_distance < (rules.liq_distance_pct || 15) / 100 ? 'neg' : ''}">${pct(liq.liq_distance, 1)}</span>` : '无', liq ? `${esc(liq.label.split(' ')[0])} ${esc(liq.coin)}` : '全部持仓无强平价（低杠杆全仓）')}
     ${kpi('最大单币敞口', topCoin ? esc(topCoin.coin) : '—', topCoin ? `${usd(topCoin.long + topCoin.short)} · 占持仓 ${pct((topCoin.long + topCoin.short) / (ntl || 1), 0)}` : '')}
     ${kpi('资金集中度', pct(sum(topAddr, s => s.equity_now) / (eq || 1), 0), '前 3 大地址资金占比')}
+    ${depKpi(depNow(), `账户资金 ${usd(eq)} · 持仓名义 ÷ 部署 ${(depNow() ? ntl / depNow() : 0).toFixed(2)}x`)}
   </div>
   ${card('风险提醒', `按 alert_rules 阈值生成；${S.live ? '持仓为实时数据，提醒仍为最近一次采集结果' : '最近一次采集结果'}`, table('rk-al', [
     { k: 'level', t: '级别', f: r => chip(r.level), v: r => ({ '严重': 3, '警告': 2, '提示': 1 }[r.level]) },
@@ -764,6 +790,7 @@ function vDevops() {
     ${kpi('检查项', `${(H.checks || []).length - failed.length} / ${(H.checks || []).length} 通过`, failed.length ? `${crit} 严重 · ${warn} 警告 · ${failed.length - crit - warn} 提示` : '全部通过')}
     ${kpi('监控地址', (meta.addresses || S.addrs).length, `起始日 ${meta.since || '—'}`)}
     ${kpi('数据文件', files.length, `合计 ${(sum(files, f => f.bytes) / 1024).toFixed(0)} KB`)}
+    ${kpi('部署接口', S.hasDep ? `<span class="pos">已接入</span>` : '<span class="muted">未接入</span>', esc(S.stratMeta.api || '未配置') + (S.hasDep ? ` · ${S.deps.length} 条部署` : ''), '配置 GitHub Secrets：ALPHANET_DEPLOYMENTS_URL / ALPHANET_API_TOKEN')}
     ${kpi('浏览器实时拉取', lv ? `${Object.keys(lv.states).length}/${S.summaryFile.length}` : '未执行', lv ? `平均 ${(sum(lv.lat) / Math.max(1, lv.lat.length)).toFixed(0)} ms · 失败 ${lv.errs.length}` : '点右上角「实时刷新」')}
   </div>
   <div class="grid g2">
@@ -842,9 +869,10 @@ function stratModel(days) {
     const s = st[c.strategy] ||= newAgg({ id: c.strategy, family: c.family, coin: r.coin, source: c.source, usdc: 0, hasUsdc: false });
     addRow(s, r); addRow(fam[c.family] ||= newAgg({ id: c.family, family: c.family }), r); addRow(tot, r);
   }
-  Object.values(st).forEach(g => { finish(g, days, p => stratOf(p.addr, p.coin).strategy === g.id); g.roi = g.hasUsdc && g.usdc > 0 ? g.net / g.usdc : null; });
-  Object.values(fam).forEach(g => finish(g, days, p => stratOf(p.addr, p.coin).family === g.id));
-  finish(tot, days, () => true);
+  const dep = (g, f) => { g.depNow = depNow(f); g.depAvg = depAvg(days, f); g.roi = g.depAvg > 0 ? g.net / g.depAvg : null; };
+  Object.values(st).forEach(g => { finish(g, days, p => stratOf(p.addr, p.coin).strategy === g.id); dep(g, d => d.strategy === g.id); });
+  Object.values(fam).forEach(g => { finish(g, days, p => stratOf(p.addr, p.coin).family === g.id); dep(g, d => d.family === g.id); });
+  finish(tot, days, () => true); dep(tot, () => true);
   return { fam, st, tot };
 }
 
@@ -856,13 +884,16 @@ function mergeSmall(list, days, fam) {
     for (const k of ['volume', 'fills', 'realized', 'fees', 'funding', 'wins', 'losses', 'open_long', 'open_short']) g[k] += s[k];
     for (const d in s.daily) { g.daily[d] = (g.daily[d] || 0) + s.daily[d]; g.dvol[d] = (g.dvol[d] || 0) + (s.dvol[d] || 0); }
   }
-  return finish(g, days, () => false);
+  finish(g, days, () => false);
+  const ids = new Set(list.map(x => x.id)); g.depNow = depNow(d => ids.has(d.strategy)); g.depAvg = depAvg(days, d => ids.has(d.strategy)); g.roi = g.depAvg > 0 ? g.net / g.depAvg : null;
+  return g;
 }
 function stratCols(totVol, opt = {}) {
   return [
     { k: 'id', t: opt.first || '策略', nosort: 1, f: r => r._fam ? `<b>${famChip(r.id)}</b>` : r._tot ? '<b>总策略</b>' : r._small ? `<span style="padding-left:14px" class="muted" title="${esc(r.coins)}">${esc(r.id)}</span>` : `<span style="padding-left:14px">${opt.link === false ? esc(r.id) : `<a href="#strategy/${encodeURIComponent(r.id)}">${esc(r.id)}</a>`}</span>` },
     { k: 'deps', t: '部署', n: 1, nosort: 1, f: r => r.deps.size, tip: '地址 × 币种 部署组合数' },
     { k: 'act', t: '活跃地址', n: 1, nosort: 1, f: r => r.active.size },
+    { k: 'dep', t: '部署金额', n: 1, nosort: 1, f: r => depCell(r.depNow), tip: '内部部署接口：当前生效的部署 USDC' },
     { k: 'volume', t: '交易量', n: 1, nosort: 1, f: r => usd(r.volume) },
     { k: 'share', t: '量占比', n: 1, nosort: 1, f: r => pct(totVol ? r.volume / totVol : 0, 1) },
     { k: 'realized', t: '已实现', n: 1, nosort: 1, f: r => sp(r.realized) },
@@ -870,7 +901,7 @@ function stratCols(totVol, opt = {}) {
     { k: 'funding', t: '资金费', n: 1, nosort: 1, f: r => sp(r.funding) },
     { k: 'net', t: '交易净盈亏', n: 1, nosort: 1, f: r => `<b>${sp(r.net)}</b>` },
     { k: 'bps', t: 'bps', n: 1, nosort: 1, f: r => `<span class="${cls(r.bps)}">${r.bps.toFixed(1)}</span>`, tip: '交易净盈亏 ÷ 交易量 × 10000' },
-    ...(opt.roi ? [{ k: 'roi', t: '收益率', n: 1, nosort: 1, f: r => r.roi == null ? '<span class="muted">—</span>' : spp(r.roi), tip: '交易净盈亏 ÷ 部署 USDC' }] : []),
+    ...(opt.roi ? [{ k: 'roi', t: '收益率', n: 1, nosort: 1, f: r => r.roi == null ? '<span class="muted">—</span>' : spp(r.roi), tip: '交易净盈亏 ÷ 区间平均部署金额' }] : []),
     { k: 'wr', t: '平仓胜率', n: 1, nosort: 1, f: r => r.wr == null ? '—' : pct(r.wr, 0) },
     { k: 'wd', t: '盈/亏天', n: 1, nosort: 1, f: r => `<span class="pos">${r.winDays}</span>/<span class="neg">${r.lossDays}</span>` },
     { k: 'pf', t: '盈亏比', n: 1, nosort: 1, f: r => r.pf == null ? '—' : r.pf.toFixed(2), tip: '平均盈利日 ÷ 平均亏损日' },
@@ -914,6 +945,7 @@ function vStrategy(param) {
       <div class="kpi-v ${cls(g.net)}">${usd(g.net, { sign: true })}</div>
       <div class="kpi-s">交易净盈亏 · ${g.bps.toFixed(1)} bps · 占总量 ${pct(totVol ? g.volume / totVol : 0, 1)}</div>
       <dl class="kv" style="margin-top:12px">
+        <dt>部署金额</dt><dd>${depCell(g.depNow)}${S.hasDep && g.roi != null ? ` · 收益率 ${spp(g.roi)}` : ''}</dd>
         <dt>交易量</dt><dd>${usd(g.volume)}（${int(g.fills)} 笔）</dd>
         <dt>已实现 / 手续费 / 资金费</dt><dd>${sp(g.realized)} / ${usd(g.fees)} / ${sp(g.funding)}</dd>
         <dt>部署 / 活跃地址</dt><dd>${g.deps.size} / ${g.active.size}</dd>
@@ -939,6 +971,7 @@ function vStrategy(param) {
   <div class="kpis">
     ${kpi('总交易净盈亏', sp(T.net), `${T.bps.toFixed(1)} bps · 已实现 − 手续费 + 资金费`)}
     ${kpi('已实现盈亏', sp(T.realized), `手续费 ${usd(T.fees)} · 资金费 ${sp(T.funding)}`)}
+    ${depKpi(T.depNow, `区间平均 ${usd(T.depAvg)}${T.roi != null ? ' · 收益率 ' + pct(T.roi, 2, true) : ''}`)}
     ${kpi('交易量', usd(T.volume), `${int(T.fills)} 笔 · 日均 ${usd(T.volume / Math.max(1, days.length))}`)}
     ${kpi('策略 / 部署', `${strats.length} / ${T.deps.size}`, `${fams.length} 个大类 · ${T.addrs.size} 个地址`)}
     ${kpi('昨日活跃部署', T.dact[lastDay]?.size || 0, lastDay ? lastDay.slice(5) : '')}
@@ -955,7 +988,7 @@ function vStrategy(param) {
     ${card('每日交易量 · 大类', '按大类堆叠', legend(fams.map(f => [famColor(f), f])) + chartBox('sf-vol'))}
     ${card('盈亏构成 · 大类', '已实现、手续费（负）、资金费', legend([[css('--s1'), '已实现'], [css('--s2'), '手续费'], [css('--s3'), '资金费']]) + chartBox('sf-attr'))}
   </div>
-  ${card('策略明细', `大类小计 → 各策略（大类 + 币种）。交易净盈亏为成交口径，不含持仓浮盈；区间交易量不足 ${usd(SMALL_VOL)} 且无持仓的币种合并为「其他小币种」；点击策略名看详情`, table('sf-tbl', stratCols(totVol, { roi: strats.some(s => s.hasUsdc) }), rows))}
+  ${card('策略明细', `大类小计 → 各策略（大类 + 币种）。交易净盈亏为成交口径，不含持仓浮盈；区间交易量不足 ${usd(SMALL_VOL)} 且无持仓的币种合并为「其他小币种」；点击策略名看详情`, table('sf-tbl', stratCols(totVol, { roi: S.hasDep }), rows))}
   <div class="grid g2">
     ${card('策略净盈亏排行', '区间交易净盈亏', chartBox('sf-rank', 'tall'))}
     ${card('策略交易效率', '净盈亏 / 交易量（bps），越高越好', chartBox('sf-bps', 'tall'))}
@@ -970,7 +1003,7 @@ function vStrategy(param) {
       .concat([{ k: 'n', t: '合计', n: 1, nosort: 1, f: r => `<b>${sp(r.n)}</b>` }, { k: 'v', t: '交易量', n: 1, nosort: 1, f: r => usd(r.v) }]), wkRows))}
     ${card('地址 × 大类', '每个地址在各大类上的交易净盈亏（可排序）', table('sf-af', [{ k: 'label', t: '地址', f: r => `<a href="#address/${r.addr}">${esc(r.label)}</a>` }]
       .concat(fams.map(f => ({ k: 'n_' + f, t: esc(f), n: 1, f: r => r['v_' + f] ? sp(r['n_' + f] || 0) : '<span class="muted">—</span>', v: r => r['n_' + f] ?? -1e15 })))
-      .concat([{ k: 'n', t: '合计', n: 1, f: r => `<b>${sp(r.n)}</b>` }, { k: 'v', t: '交易量', n: 1, f: r => usd(r.v) }]), afRows, { sort: 'v', scroll: 1 }))}
+      .concat([{ k: 'n', t: '合计', n: 1, f: r => `<b>${sp(r.n)}</b>` }, { k: 'dep', t: '部署金额', n: 1, v: r => depNow(byAddr(r.addr)), f: r => depCell(depNow(byAddr(r.addr))) }, { k: 'v', t: '交易量', n: 1, f: r => usd(r.v) }]), afRows, { sort: 'v', scroll: 1 }))}
   </div>`;
   const after = () => {
     const L = days.map(shortDay);
@@ -1002,7 +1035,7 @@ function stratDetail(days, M) {
     const net = sum(rs, r => r.realized_pnl - r.fees + (r.funding || 0)), vol = sum(rs, r => r.volume), w = sum(rs, r => r.wins), l = sum(rs, r => r.losses);
     const daily = {}; rs.forEach(r => daily[r.day] = (daily[r.day] || 0) + r.realized_pnl - r.fees + (r.funding || 0));
     return { key: k, addr, label: S.label[addr], first: c.first, last: c.last, days: rs.filter(r => r.fills).length, volume: vol, fills: sum(rs, r => r.fills), fees: sum(rs, r => r.fees),
-      net, bps: vol ? net / vol * 1e4 : 0, wr: w + l ? w / (w + l) : null, usdc: c.usdc, sg: c.signal_group || '', daily,
+      net, bps: vol ? net / vol * 1e4 : 0, wr: w + l ? w / (w + l) : null, usdc: depNow(d => d.addr === addr && d.coin === coin), usdcAvg: depAvg(days, d => d.addr === addr && d.coin === coin), sg: c.signal_group || '', daily,
       pos: P.map(p => `${p.side} ${usd(p.notional)}`).join(' / '), upnl: sum(P, p => p.unrealized_pnl), hasPos: P.length > 0 };
   }).filter(m => m.volume > 0 || m.hasPos).sort((a, b) => b.volume - a.volume);
   const bpsList = mem.filter(m => m.volume > 1000).map(m => m.bps);
@@ -1013,6 +1046,7 @@ function stratDetail(days, M) {
   <div class="sec-t">策略详情 · ${esc(g.id)} ${famChip(g.family)} <span class="chip mute">${esc(g.source)}</span></div>
   <div class="kpis">
     ${kpi('交易净盈亏', sp(g.net), `${g.bps.toFixed(1)} bps${g.roi != null ? ' · 收益率 ' + pct(g.roi, 2, true) : ''}`)}
+    ${depKpi(g.depNow, `区间平均 ${usd(g.depAvg)}`)}
     ${kpi('交易量', usd(g.volume), `${int(g.fills)} 笔 · 占总量 ${pct(M.tot.volume ? g.volume / M.tot.volume : 0, 1)}`)}
     ${kpi('已实现 / 手续费', sp(g.realized), `手续费 ${usd(g.fees)} · 资金费 ${sp(g.funding)}`)}
     ${kpi('部署 / 活跃地址', `${g.deps.size} / ${g.active.size}`, '')}
@@ -1032,7 +1066,8 @@ function stratDetail(days, M) {
     { k: 'volume', t: '交易量', n: 1, f: r => usd(r.volume) }, { k: 'fills', t: '笔数', n: 1, f: r => int(r.fills) }, { k: 'fees', t: '手续费', n: 1, f: r => usd(r.fees) },
     { k: 'net', t: '交易净盈亏', n: 1, f: r => sp(r.net) }, { k: 'bps', t: 'bps', n: 1, f: r => `<span class="${cls(r.bps)}">${r.bps.toFixed(1)}</span>` },
     { k: 'wr', t: '平仓胜率', n: 1, f: r => r.wr == null ? '—' : pct(r.wr, 0) },
-    { k: 'usdc', t: '部署 USDC', n: 1, f: r => r.usdc == null ? '—' : usd(r.usdc) },
+    { k: 'usdc', t: '部署金额', n: 1, f: r => depCell(r.usdc) },
+    { k: 'roi', t: '收益率', n: 1, f: r => r.usdcAvg > 0 ? spp(r.net / r.usdcAvg) : '—', tip: '交易净盈亏 ÷ 区间平均部署金额' },
     { k: 'sg', t: '信号组', f: r => r.sg && !r.sg.includes('独立') ? esc(r.sg) : '<span class="muted">—</span>', tip: '最近 21 天与其它地址同步下单的分组' },
     { k: 'pos', t: '持仓', f: r => r.pos || '<span class="muted">无</span>' }, { k: 'upnl', t: '浮动盈亏', n: 1, f: r => r.hasPos ? sp(r.upnl) : '—' }], mem, { sort: 'volume' }))}
   ${card('部署 × 日期 交易净盈亏', '', heatmap(mem.map(m => m.key), k => S.label[k.split('|')[0]], days, (k, d) => {

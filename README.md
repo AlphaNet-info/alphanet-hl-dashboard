@@ -77,6 +77,26 @@ AlphaNet 规定一个账户的一个币种只部署一个策略，所以「地�
    - 与其它钱包都不重合的组合会标为「独立组合」。
    - 推断依赖的成交缓存保存在 `pipeline/cache/signals.json`，每天随数据一起提交。
 
+## 部署金额
+
+看板中凡是显示「资金」的地方，旁边都有一列「部署金额」，数据来自内部部署接口的部署 USDC。目前显示为「—」，表示还没接入。
+
+接入步骤：
+
+1. 在 GitHub 仓库的 Settings → Secrets and variables → Actions 中新增两个 Secret：
+   - `ALPHANET_DEPLOYMENTS_URL`：部署接口的完整地址；
+   - `ALPHANET_API_TOKEN`：访问令牌。默认以 `Authorization: Bearer <token>` 方式发送；如果接口要求别的 Header，改 `pipeline/strategies.json` 的 `api_auth_header` 和 `api_auth_prefix`。
+2. 如果接口返回的字段名和默认值不同，在 `pipeline/strategies.json` 的 `api_fields` 里改成实际的字段名。默认字段为 `address / asset / strategy / family / usdc / start / stop / status`。
+3. 手动运行一次 Actions。接入成功后，「运维监控」页的「部署接口」会显示为已接入。
+
+接口返回的每条部署都会写入 `data/deployments.json`，包含起止时间，所以任意一天的部署金额都能算出来。接入后看板会：
+
+- 画出「资金 vs 部署金额」曲线；
+- 显示资金利用率；
+- 计算策略收益率，即交易净盈亏 ÷ 区间平均部署金额。
+
+暂时没有接口时，也可以在 `pipeline/strategies.json` 的 `deployments` 里手动填写，例如 `{"addr": "0x…", "coin": "ZEC", "usdc": 20000, "start": "2026-10-10"}`。
+
 ## 数据管道
 
 ```
