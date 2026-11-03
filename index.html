@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AlphaNet Hyperliquid 综合看板</title>
+<meta name="description" content="AlphaNet Hyperliquid 地址监控：公司总览、运营、风控、地址、币种、周报、运维多视角看板">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%232a78d6'/%3E%3Cpath d='M8 22l5-7 4 4 7-9' stroke='white' stroke-width='3' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="assets/app.css">
+<script src="assets/chart.umd.js"></script>
+</head>
+<body>
+<div class="app">
+  <aside class="side" id="side">
+    <div class="brand">
+      <div class="logo">A</div>
+      <div><div class="brand-t">AlphaNet</div><div class="brand-s">Hyperliquid 综合看板</div></div>
+    </div>
+    <nav id="nav">
+      <div class="nav-g">管理层</div>
+      <a href="#overview" data-v="overview"><span>◎</span>公司总览</a>
+      <a href="#weekly" data-v="weekly"><span>▦</span>周报 / 月报</a>
+      <div class="nav-g">运营</div>
+      <a href="#ops" data-v="ops"><span>↗</span>运营分析</a>
+      <a href="#address" data-v="address"><span>◉</span>地址分析</a>
+      <a href="#coins" data-v="coins"><span>◈</span>币种分析</a>
+      <div class="nav-g">风控</div>
+      <a href="#risk" data-v="risk"><span>⚠</span>风控与持仓<b class="badge" id="nav-alerts"></b></a>
+      <div class="nav-g">运维</div>
+      <a href="#devops" data-v="devops"><span>⚙</span>运维监控<b class="badge" id="nav-health"></b></a>
+    </nav>
+    <div class="side-foot" id="side-foot"></div>
+  </aside>
+  <main>
+    <header class="top">
+      <button class="icon-btn menu" id="menu" aria-label="菜单">☰</button>
+      <div class="top-title"><h1 id="page-title">公司总览</h1><div class="sub" id="page-sub"></div></div>
+      <div class="top-ctl">
+        <div class="seg" id="range" role="group" aria-label="时间范围">
+          <button data-r="7">7天</button><button data-r="14">14天</button><button data-r="30">30天</button><button data-r="0">全部</button>
+        </div>
+        <button class="btn" id="live-btn" title="从 Hyperliquid API 实时拉取资金与持仓">⟳ 实时刷新</button>
+        <button class="icon-btn" id="theme-btn" aria-label="切换主题">◐</button>
+      </div>
+    </header>
+    <div id="banner"></div>
+    <section id="view" class="view"><div class="loading">加载数据中…</div></section>
+    <footer class="foot" id="foot"></footer>
+  </main>
+</div>
+<div class="tip" id="tip"></div>
+<script src="assets/app.js"></script>
+</body>
+</html>

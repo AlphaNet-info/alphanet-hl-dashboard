@@ -1,0 +1,4 @@
+pipeline/
+.github/
+README.md
+*.log
