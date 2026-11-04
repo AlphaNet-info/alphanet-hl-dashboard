@@ -130,41 +130,60 @@ function applyLive() {
     const st = L.states[s.addr];
     if (!st) { pos.push(...S.positionsFile.filter(p => p.addr === s.addr)); continue; }
     const ms = st.marginSummary || {};
-    const eq = +ms.accountValue || 0;
+    const pe = L.port && L.port[s.addr] && L.port[s.addr].eq;
+    const eq = pe != null ? pe : (+ms.accountValue || 0);
     const ps = posFromState(s.addr, st, eq);
     pos.push(...ps);
     const upnl = sum(ps, p => p.unrealized_pnl), ntl = +ms.totalNtlPos || 0;
     const liq = ps.filter(p => p.liq_distance != null).sort((a, b) => a.liq_distance - b.liq_distance)[0];
     Object.assign(s, { equity_now: eq, unrealized_pnl: upnl, unrealized_pct: eq > 1 ? upnl / eq : 0, position_ntl: ntl,
       margin_used: +ms.totalMarginUsed || 0, leverage: eq > 1 ? ntl / eq : 0, positions_count: ps.length,
-      liq_distance_min: liq ? liq.liq_distance : null, _live: true });
+      liq_distance_min: liq ? liq.liq_distance : null, _live: true,
+      live_pnl_24h: L.port && L.port[s.addr] ? L.port[s.addr].pnl : null, live_vlm_24h: L.port && L.port[s.addr] ? L.port[s.addr].vlm : null });
   }
   S.positions = pos;
+}
+
+async function post(body, tries = 4) {
+  for (let i = 0; ; i++) {
+    const r = await fetch(API, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    if (r.ok) return r.json();
+    if (r.status !== 429 || i >= tries - 1) throw new Error('HTTP ' + r.status);
+    await new Promise(res => setTimeout(res, 800 * 2 ** i));
+  }
 }
 
 async function liveRefresh() {
   if (S.liveBusy) return;
   S.liveBusy = true;
   const btn = $('#live-btn'); btn.disabled = true; btn.textContent = '⟳ 拉取中…';
-  const states = {}, lat = [], errs = [];
-  const queue = S.summaryFile.map(s => s.addr);
+  const states = {}, port = {}, lat = [], errs = [];
+  const queue = S.summaryFile.map(s => s.addr), queue0 = queue.length;
   const worker = async () => {
     while (queue.length) {
       const a = queue.shift(), t0 = performance.now();
       try {
-        const r = await fetch(API, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type: 'clearinghouseState', user: a }) });
-        if (!r.ok) throw new Error('HTTP ' + r.status);
-        states[a] = await r.json();
+        const st = await post({ type: 'clearinghouseState', user: a });
+        const pf = await post({ type: 'portfolio', user: a }).catch(() => null);
+        states[a] = st;
+        const day = pf && (pf.find(x => x[0] === 'day') || [])[1];
+        if (day) {
+          const h = day.pnlHistory || [], av = day.accountValueHistory || [];
+          // portfolio 的账户价值 = 永续 + 现货（统一账户的 USDC 可能在现货里，clearinghouseState 看不到）
+          port[a] = { pnl: h.length ? +h[h.length - 1][1] - +h[0][1] : 0, vlm: +day.vlm || 0, eq: av.length ? +av[av.length - 1][1] : null };
+        }
         lat.push(performance.now() - t0);
       } catch (e) { errs.push(S.label[a] + '：' + e.message); }
     }
   };
-  await Promise.all([1, 2, 3, 4].map(worker));
-  S.live = { at: new Date().toISOString(), states, lat, errs };
+  await Promise.all([1, 2].map(worker));
+  S.live = { at: new Date().toISOString(), states, port, lat, errs };
   applyLive();
-  btn.disabled = false; btn.textContent = '⟳ 实时刷新';
   S.liveBusy = false;
-  render();
+  render(true);
+  btn.disabled = false;
+  btn.textContent = errs.length ? `⚠ 已更新 ${Object.keys(states).length}/${queue0}` : `✓ 已更新 ${bj(S.live.at).slice(11, 16)}`;
+  clearTimeout(S.liveBtnT); S.liveBtnT = setTimeout(() => { btn.textContent = '⟳ 实时刷新'; }, 4000);
 }
 
 /* ---------- charts ---------- */
@@ -342,7 +361,9 @@ function vOverview() {
 
   const html = `
   <div class="kpis">
-    ${kpi('账户总资金', usd(last.equity), `较前日 ${sp(prev ? last.equity - prev.equity : 0)} · ${rlab}净流入 ${sp(flow)}`)}
+    ${S.live ? kpi('账户总资金 · 实时', usd(eqNow), `较 ${last.day.slice(5)} 日终 ${sp(eqNow - last.equity)} · ${rlab}净流入 ${sp(flow)}`, '实时 = 刚才从 Hyperliquid clearinghouseState 拉取的账户价值合计')
+      : kpi('账户总资金', usd(last.equity), `较前日 ${sp(prev ? last.equity - prev.equity : 0)} · ${rlab}净流入 ${sp(flow)}`)}
+    ${S.live ? kpi('近 24 小时 · 实时', sp(sum(S.summary, s => s.live_pnl_24h || 0)), `交易量 ${usd(sum(S.summary, s => s.live_vlm_24h || 0))} · ${bj(S.live.at).slice(11, 16)} 拉取`, 'Hyperliquid portfolio 的 day 窗口（滚动 24 小时，不是 UTC 自然日）') : ''}
     ${depKpi(depNow(), `资金利用率 ${pct(last.equity ? depNow() / last.equity : 0, 0)} · 较${rlab}初 ${sp(depNow() - depOn(R[0].day))}`)}
     ${kpi(`${rlab}官方盈亏`, sp(pnl), `收益率 ${spp(roi)}`, '官方口径 = Hyperliquid portfolio 的盈亏历史，含持仓浮动盈亏变化')}
     ${kpi(`昨日盈亏 · ${last.day.slice(5)}`, sp(last.pnl_day), `占前日资金 ${spp(last.pnl_pct, 3)}`)}
@@ -1131,6 +1152,7 @@ function banners() {
   if (H.generated_at && (Date.now() - Date.parse(H.generated_at)) / 36e5 > 26) b.push(`<div class="bn warn"><b>⚠ 数据已过期</b><span>最近一次更新是 ${ago(H.generated_at)}，请到「运维监控」检查 GitHub Actions 运行状态。</span></div>`);
   if (H.status === 'failed') b.push(`<div class="bn crit"><b>✕ 数据检查未通过</b><span>${esc((H.checks || []).filter(c => !c.ok && c.level === '严重').map(c => c.name + '：' + c.detail).join('；'))}</span></div>`);
   if (crit.length && ['overview', 'risk'].includes(S.view)) b.push(`<div class="bn crit"><b>! ${crit.length} 条严重提醒</b><span>${crit.map(a => `<a href="#address/${a.addr}">${esc(a.label)}</a> ${esc(a.message)}`).join('；')}</span></div>`);
+  if (S.live && !S.live.errs.length) b.push(`<div class="bn info"><b>● 实时数据 ${bj(S.live.at).slice(11)}</b><span>已更新：账户资金、持仓、浮动盈亏、杠杆、近 24 小时盈亏与交易量。每日图表、日度盈亏和风险提醒仍为每天 08:07 的数据。</span></div>`);
   if (S.live && S.live.errs.length) b.push(`<div class="bn warn"><b>实时拉取部分失败</b><span>${S.live.errs.length} 个地址失败，已使用快照数据代替。</span></div>`);
   $('#banner').innerHTML = b.join('');
 }
