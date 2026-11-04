@@ -3,12 +3,13 @@
 'use strict';
 
 const API = 'https://api.hyperliquid.xyz/info';
-const FILES = ['meta', 'daily_total', 'addr_daily', 'addr_summary', 'positions', 'alerts', 'alert_rules', 'coin_daily', 'exposure_daily', 'health', 'run_log', 'strategies', 'deployments', 'strategy_catalog'];
+const FILES = ['meta', 'daily_total', 'addr_daily', 'addr_summary', 'positions', 'alerts', 'alert_rules', 'coin_daily', 'exposure_daily', 'health', 'run_log', 'strategies', 'deployments', 'strategy_catalog', 'client_cards'];
 const VIEWS = {
   overview: { t: '公司总览', s: '公司整体经营：资金规模、盈亏、交易量与成本' },
   weekly:   { t: '周报 / 月报', s: '按 ISO 周（周一至周日）与自然月汇总，UTC 口径' },
   ops:      { t: '运营分析', s: '地址活跃度、交易量贡献、成交结构与费率' },
   address:  { t: '地址分析', s: '每个监控地址的表现、明细与盈亏热力图' },
+  cards:    { t: '客户卡片', s: '每个部署钱包的策略 × 币种盈亏、手续费、资金费与胜率，可导出图片发给客户' },
   coins:    { t: '币种分析', s: '各币种成交、盈亏、Maker/Taker 与多空方向' },
   strategy: { t: '策略分析', s: '总策略 → 大类（Archimedes PI / Archimedes / Hackworth）→ 策略（大类 + 币种）→ 部署' },
   risk:     { t: '风控与持仓', s: '风险提醒、持仓敞口、杠杆、强平距离与回撤' },
@@ -732,6 +733,84 @@ function vCoins() {
   return [html, after];
 }
 
+/* ---------- 客户卡片 ---------- */
+const CC_NAME = { 'Hackworth Prime': 'HW Prime', 'Hackworth Trend': 'HW Trend', 'Hackworth OptimaShort': 'HW OptimaShort', 'Archimedes': 'Archimedes' };
+const CC_DOT = { 'Hackworth Prime': '#3b82f6', 'Hackworth Trend': '#8b5cf6', 'Hackworth OptimaShort': '#f59e0b', 'Archimedes': '#14b8a6' };
+const ccN = (v, sign = true) => {
+  if (v == null) return '—';
+  const r = Math.round(v);
+  if (!sign) return Math.abs(r).toLocaleString('en-US');
+  return r === 0 ? '0' : (r > 0 ? '+' : '−') + Math.abs(r).toLocaleString('en-US');
+};
+const ccT = (v, pctv) => v == null || (pctv ? Math.abs(v) < 0.00005 : Math.round(v) === 0) ? 'm' : v > 0 ? 'p' : 'n';
+
+function ccCard(c, asof) {
+  const ret = c.return_pct == null ? '—' : (c.return_pct > 0 ? '+' : c.return_pct < 0 ? '−' : '') + Math.abs(c.return_pct * 100).toFixed(2) + '%';
+  const rows = c.rows.map(r => {
+    const on = r.status === 'active', wr = r.win_rate;
+    const wc = wr == null ? '' : wr >= 0.6 ? 'p' : wr >= 0.4 ? 'w' : 'n';
+    return `<tr class="${on ? 'on' : 'off'}">
+      <td class="st"><span class="pl ${on ? 'on' : 'off'}">${on ? 'ACTIVE' : 'WITHDRAWN'}</span></td>
+      <td class="l"><i style="background:${CC_DOT[r.strategy] || '#64748b'}"></i>${esc(CC_NAME[r.strategy] || r.strategy)}</td>
+      <td>${esc(r.coin)}</td>
+      <td class="${ccT(r.net)}">${ccN(r.net)}</td>
+      <td class="${ccT(r.realized)}">${ccN(r.realized)}</td>
+      <td class="${r.fees ? 'n' : 'm'}">${r.fees == null ? '—' : ccN(-r.fees)}</td>
+      <td class="${ccT(r.funding)}">${ccN(r.funding)}</td>
+      <td class="${ccT(r.unrealized)}">${ccN(r.unrealized)}</td>
+      <td class="${ccT(r.daily)}">${ccN(r.daily)}</td>
+      <td>${ccN(r.usdc, false)}</td><td>${r.days}d</td><td>${r.deploy}</td><td>${r.withdraw || '—'}</td>
+      <td class="${wc}">${wr == null ? '—' : (wr * 100).toFixed(1) + '%'}</td></tr>`;
+  }).join('');
+  return `<div class="cc" id="cc-card">
+    <div class="cc-h"><div class="cc-a"><span class="cc-b"></span>${c.addr.slice(0, 6)}...${c.addr.slice(-4)}</div><div class="cc-br"><b>AlphaNet</b> · HYPERLIQUID</div></div>
+    <div class="cc-tiles">
+      <div class="cc-t1">
+        <div><div class="cc-l">Total PnL</div><div class="cc-v ${ccT(c.total_pnl)}">${ccN(c.total_pnl)}</div></div>
+        <div><div class="cc-l">Return %</div><div class="cc-v ${ccT(c.return_pct, 1)}">${ret}</div></div>
+        <div><div class="cc-l">Unrealized PnL</div><div class="cc-v ${ccT(c.unrealized)}">${ccN(c.unrealized)}</div></div>
+      </div>
+      <div class="cc-t2"><div class="cc-l">Total Assets</div><div class="cc-v">${Math.round(c.assets).toLocaleString('en-US')}</div><div class="cc-s">USDC · incl. PnL · Hyperliquid account value</div></div>
+    </div>
+    <div class="cc-c">${c.rows.length} combos (${c.active} active · ${c.withdrawn} withdrawn)</div>
+    <div class="cc-tw"><table><thead><tr><th class="st">Status</th><th class="l">Strategy</th><th>Symbol</th><th>Net PnL</th><th>Realized</th><th>Fees</th><th>Funding</th><th>Unrealized</th><th>Daily PnL</th><th>USDC</th><th>Days</th><th>Deploy</th><th>Withdraw</th><th>Win Rate</th></tr></thead><tbody>${rows}</tbody></table></div>
+    <div class="cc-n">Net PnL = Realized − Fees + Funding + Unrealized. Funding: + received / − paid.${c.partial ? ' For combos with Fees marked “—”, fees are already deducted in Net PnL (trade history beyond Hyperliquid’s 10,000-fill window).' : ''}</div>
+    <div class="cc-f"><span>Data as of ${asof} (UTC+8)</span><span>AlphaNet · Hyperliquid</span></div>
+  </div>`;
+}
+
+function vCards(param) {
+  const D = S.D.client_cards;
+  if (!D || !(D.cards || []).length) return `<div class="bn warn"><b>还没有客户卡片数据</b><span>需要在 GitHub 仓库 Settings → Secrets 添加 ALPHANET_API_KEY，每日任务会生成 data/client_cards.json。</span></div>`;
+  const cards = D.cards;
+  const want = param ? param.toLowerCase() : (S.ccSel || '').toLowerCase();
+  const c = cards.find(x => x.addr.toLowerCase() === want) || cards[0];
+  S.ccSel = c.addr;
+  const asof = bj(D.generated_at).slice(0, 16);
+  const opt = cards.map(x => `<option value="${x.addr}" ${x.addr === c.addr ? 'selected' : ''}>${esc(S.label[x.addr.toLowerCase()] || S.label[x.addr] || (x.addr.slice(0, 6) + '…' + x.addr.slice(-4)))} · 资产 ${usd(x.assets)} · 盈亏 ${ccN(x.total_pnl)}</option>`).join('');
+  const html = `
+  ${card('选择客户', `共 ${cards.length} 个部署过的钱包 · 数据生成于 ${bj(D.generated_at)}${D.errors && D.errors.length ? ` · <span class="neg">${D.errors.length} 个失败</span>` : ''}`,
+    `<div class="toolbar cc-bar"><select id="cc-sel">${opt}</select><button class="btn" id="cc-png">⤓ 下载图片</button><button class="btn" id="cc-copy">⧉ 复制图片</button><span class="muted" id="cc-msg"></span></div>`)}
+  <div class="cc-wrap">${ccCard(c, asof)}</div>`;
+  const after = () => {
+    $('#cc-sel').onchange = e => { location.hash = 'cards/' + e.target.value; };
+    const shot = () => htmlToImage.toBlob($('#cc-card'), { pixelRatio: 2, backgroundColor: '#05080c' });
+    const msg = t => { $('#cc-msg').textContent = t; setTimeout(() => { $('#cc-msg').textContent = ''; }, 3000); };
+    $('#cc-png').onclick = async () => {
+      try {
+        const b = await shot(); const a = document.createElement('a');
+        a.href = URL.createObjectURL(b); a.download = `${c.addr.slice(0, 6)}_${c.addr.slice(-4)}_${D.generated_at.slice(0, 10).replace(/-/g, '')}.png`; a.click();
+        msg('已下载');
+      } catch (e) { msg('导出失败：' + e.message); }
+    };
+    $('#cc-copy').onclick = async () => {
+      try { await navigator.clipboard.write([new ClipboardItem({ 'image/png': shot() })]); msg('已复制，可直接粘贴到 TG / 微信'); }
+      catch (e) { msg('浏览器不支持复制图片，请用下载'); }
+    };
+  };
+  return [html, after];
+}
+
 function vRisk() {
   const rules = Object.fromEntries((S.D.alert_rules || []).map(r => [r.key, r.threshold]));
   const A = S.alerts, P = S.positions, sm = S.summary;
@@ -1169,7 +1248,7 @@ function render(keepScroll) {
   document.querySelectorAll('#range button').forEach(b => b.classList.toggle('on', +b.dataset.r === S.range));
   $('#range').style.visibility = ['risk', 'weekly'].includes(S.view) ? 'hidden' : '';
   banners();
-  const fn = { overview: vOverview, weekly: vWeekly, ops: vOps, address: vAddress, coins: vCoins, strategy: vStrategy, risk: vRisk, devops: vDevops }[S.view];
+  const fn = { cards: vCards, overview: vOverview, weekly: vWeekly, ops: vOps, address: vAddress, coins: vCoins, strategy: vStrategy, risk: vRisk, devops: vDevops }[S.view];
   let out;
   try { out = fn(param); } catch (e) { console.error(e); out = `<div class="bn crit">渲染出错：${esc(e.message)}</div>`; }
   const [html, after] = Array.isArray(out) ? out : [out, null];

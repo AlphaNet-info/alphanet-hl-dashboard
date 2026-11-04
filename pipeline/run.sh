@@ -15,4 +15,5 @@ python3 pipeline/collector.py fetch     --watchlist "$WL" "${PREV_ARG[@]}" --raw
 python3 pipeline/collector.py transform --watchlist "$WL" "${PREV_ARG[@]}" --raw "$RAW" --out data
 python3 pipeline/extras.py --watchlist "$WL" --raw "$RAW" --data data --started "$STARTED"
 python3 pipeline/strategies.py --watchlist "$WL" --raw "$RAW" --data data || echo "策略识别失败（不影响其它数据）"
+python3 pipeline/client_cards.py --data data || echo "客户卡片生成失败（不影响其它数据）"
 rm -f "$RAW"
