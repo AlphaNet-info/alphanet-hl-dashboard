@@ -3,7 +3,7 @@
 'use strict';
 
 const API = 'https://api.hyperliquid.xyz/info';
-const FILES = ['meta', 'daily_total', 'addr_daily', 'addr_summary', 'positions', 'alerts', 'alert_rules', 'coin_daily', 'exposure_daily', 'health', 'run_log', 'strategies', 'deployments', 'strategy_catalog', 'client_cards'];
+const FILES = ['meta', 'daily_total', 'addr_daily', 'addr_summary', 'positions', 'alerts', 'alert_rules', 'coin_daily', 'exposure_daily', 'health', 'run_log', 'strategies', 'deployments', 'strategy_catalog', 'client_cards', 'names'];
 const VIEWS = {
   overview: { t: '公司总览', s: '公司整体经营：资金规模、盈亏、交易量与成本' },
   weekly:   { t: '周报 / 月报', s: '按 ISO 周（周一至周日）与自然月汇总，UTC 口径' },
@@ -44,6 +44,9 @@ const ago = iso => { const h = (Date.now() - Date.parse(iso)) / 36e5; return h <
 const bj = iso => { const d = new Date(Date.parse(iso) + 8 * 36e5); return d.toISOString().slice(0, 16).replace('T', ' ') + ' 北京'; };
 const LV = { '严重': 'crit', '警告': 'warn', '提示': 'info', '正常': 'ok', '通过': 'ok' };
 const LVI = { '严重': '!', '警告': '!', '提示': 'i', '正常': '✓', '通过': '✓' };
+const nmOf = a => (S.name && a && S.name[String(a).toLowerCase()]) || '';
+const nmTag = a => nmOf(a) ? ` <span class="nm">${esc(nmOf(a))}</span>` : '';
+const shortLab = s => s.label.split(' ')[0] + (nmOf(s.addr) ? ' ' + nmOf(s.addr) : '');
 const chip = (lv, txt) => `<span class="chip ${LV[lv] || 'mute'}">${LVI[lv] ? LVI[lv] + ' ' : ''}${esc(txt ?? lv)}</span>`;
 
 /* ---------- data ---------- */
@@ -64,6 +67,7 @@ function prep(D) {
   S.addrs = meta.addresses.length ? meta.addresses : (D.addr_summary || []).map(s => ({ addr: s.addr, label: s.label, group: '未分组' }));
   S.label = Object.fromEntries(S.addrs.map(a => [a.addr, a.label]));
   S.group = Object.fromEntries(S.addrs.map(a => [a.addr, a.group || '未分组']));
+  S.name = Object.fromEntries(Object.entries((D.names && D.names.names) || {}).map(([k, v]) => [k.toLowerCase(), v]));
   S.dt = (D.daily_total || []).filter(r => !r.partial);
   S.days = S.dt.map(r => r.day);
   S.ad = (D.addr_daily || []).filter(r => !r.partial);
@@ -549,7 +553,7 @@ function vOps() {
       { k: 'active', t: '活跃', n: 1 }, { k: 'equity', t: '资金', n: 1, f: r => usd(r.equity) }, { k: 'dep', t: '部署金额', n: 1, f: r => depCell(r.dep) }, { k: 'volume', t: '交易量', n: 1, f: r => usd(r.volume) }], Object.values(groups), { sort: 'equity' }))}
   </div>
   ${card('地址运营明细', '区间口径；点击地址进入详情', table('o-list', [
-    { k: 'label', t: '地址', f: r => `<a href="#address/${r.addr}">${esc(r.label)}</a>` },
+    { k: 'label', t: '地址', f: r => `<a href="#address/${r.addr}">${esc(r.label)}</a>${nmTag(r.addr)}`, v: r => r.label + nmOf(r.addr) },
     { k: 'group', t: '分组' },
     { k: 'status', t: '状态', f: r => `<span class="chip ${r.status === '活跃' ? 'ok' : r.status === '闲置' ? 'mute' : 'info'}">${esc(r.status)}</span>` },
     { k: 'added', t: '加入名单' }, { k: 'first', t: '首次交易' }, { k: 'last', t: '最近交易' },
@@ -592,7 +596,7 @@ function vAddress(param) {
   ${card('地址总览', `区间（${days[0]?.slice(5)} ~ ${days[days.length - 1]?.slice(5)}）口径的盈亏与交易量；资金、浮盈、杠杆为${S.live ? '实时' : '最近快照'}。点击行查看详情`,
     `<div class="toolbar"><input id="addr-q" placeholder="搜索地址 / 备注 / 分组" value="${esc(S.q || '')}"></div>` +
     table('addr', [
-      { k: 'label', t: '地址', f: r => `<b>${esc(r.label)}</b>`, v: r => +(r.label.match(/#(\d+)/)?.[1] || 999) },
+      { k: 'label', t: '地址', f: r => `<b>${esc(r.label)}</b>${nmTag(r.addr)}`, v: r => +(r.label.match(/#(\d+)/)?.[1] || 999) },
       { k: 'alert_level', t: '预警', f: r => r.alert_count ? chip(r.alert_level, `${r.alert_level} ${r.alert_count}`) : chip('正常'), v: r => ({ '严重': 3, '警告': 2, '提示': 1 }[r.alert_level] || 0) },
       { k: 'equity_now', t: '资金', n: 1, f: r => usd(r.equity_now) },
       { k: 'dep', t: '部署金额', n: 1, v: r => depNow(byAddr(r.addr)), f: r => depCell(depNow(byAddr(r.addr))) },
@@ -604,7 +608,7 @@ function vAddress(param) {
       { k: 'leverage', t: '杠杆', n: 1, f: r => r.leverage ? r.leverage.toFixed(2) + 'x' : '—' },
       { k: 'drawdown_pct', t: '当前回撤', n: 1, f: r => r.drawdown_pct ? `<span class="${r.drawdown_pct > .1 ? 'neg' : ''}">${pct(r.drawdown_pct, 1)}</span>` : '—' },
       { k: 'positions', t: '持仓', f: r => `<span class="muted">${esc(r.positions)}</span>` },
-    ], rows.filter(r => !S.q || (r.label + r.addr + r.group).toLowerCase().includes(S.q.toLowerCase())), { sort: 'equity_now', click: 'addr', selKey: 'addr', scroll: 1 }))}
+    ], rows.filter(r => !S.q || (r.label + r.addr + r.group + nmOf(r.addr)).toLowerCase().includes(S.q.toLowerCase())), { sort: 'equity_now', click: 'addr', selKey: 'addr', scroll: 1 }))}
   <div id="addr-detail"></div>
   ${card('地址 × 日期 盈亏热力图', '每格为当日官方盈亏占前日资金的比例；颜色越深幅度越大', heatmap(
     S.addrs.map(a => a.addr), a => S.label[a],
@@ -632,7 +636,7 @@ function addrDetail(days) {
   const P = S.positions.filter(p => p.addr === a);
   const AL = S.alerts.filter(x => x.addr === a);
   box.innerHTML = `
-  <div class="sec-t">${esc(s.label)} <span class="addr">${a}</span>
+  <div class="sec-t">${esc(s.label)}${nmTag(a)} <span class="addr">${a}</span>
     <a href="https://app.hyperliquid.xyz/explorer/address/${a}" target="_blank" rel="noopener">HL Explorer ↗</a>
     <a href="https://hypurrscan.io/address/${a}" target="_blank" rel="noopener">Hypurrscan ↗</a></div>
   ${AL.length ? `<div class="checks">${AL.map(x => `<div class="check"><span class="ic ${LV[x.level]}">!</span><div>${chip(x.level, x.rule)} ${esc(x.message)}</div></div>`).join('')}</div>` : ''}
@@ -670,7 +674,7 @@ function addrDetail(days) {
 
 function posTable(id, P, compact) {
   const cols = [
-    ...(compact ? [] : [{ k: 'label', t: '地址', f: r => `<a href="#address/${r.addr}">${esc(r.label)}</a>` }]),
+    ...(compact ? [] : [{ k: 'label', t: '地址', f: r => `<a href="#address/${r.addr}">${esc(r.label)}</a>${nmTag(r.addr)}`, v: r => r.label + nmOf(r.addr) }]),
     { k: 'coin', t: '币种', f: r => `<b>${esc(r.coin)}</b>` },
     { k: 'strat', t: '策略', v: r => stratOf(r.addr, r.coin).strategy, f: r => { const c = stratOf(r.addr, r.coin); return `<a href="#strategy/${encodeURIComponent(c.strategy)}">${esc(c.name || c.strategy)}</a>`; } },
     { k: 'side', t: '方向', f: r => `<span class="chip ${r.side === '多' ? 'ok' : 'crit'}">${r.side}</span>` },
@@ -832,14 +836,14 @@ function vRisk() {
     ${kpi('持仓名义价值', usd(ntl), `组合杠杆 ${(eq ? ntl / eq : 0).toFixed(2)}x`)}
     ${kpi('净敞口', sp(long - short), `多 ${usd(long)} · 空 ${usd(short)}`)}
     ${kpi('浮动盈亏', sp(upnl), `占资金 ${spp(eq ? upnl / eq : 0)}`)}
-    ${kpi('最近强平距离', liq ? `<span class="${liq.liq_distance < (rules.liq_distance_pct || 15) / 100 ? 'neg' : ''}">${pct(liq.liq_distance, 1)}</span>` : '无', liq ? `${esc(liq.label.split(' ')[0])} ${esc(liq.coin)}` : '全部持仓无强平价（低杠杆全仓）')}
+    ${kpi('最近强平距离', liq ? `<span class="${liq.liq_distance < (rules.liq_distance_pct || 15) / 100 ? 'neg' : ''}">${pct(liq.liq_distance, 1)}</span>` : '无', liq ? `${esc(liq.label.split(' ')[0])}${nmOf(liq.addr) ? ' ' + esc(nmOf(liq.addr)) : ''} ${esc(liq.coin)}` : '全部持仓无强平价（低杠杆全仓）')}
     ${kpi('最大单币敞口', topCoin ? esc(topCoin.coin) : '—', topCoin ? `${usd(topCoin.long + topCoin.short)} · 占持仓 ${pct((topCoin.long + topCoin.short) / (ntl || 1), 0)}` : '')}
     ${kpi('资金集中度', pct(sum(topAddr, s => s.equity_now) / (eq || 1), 0), '前 3 大地址资金占比')}
     ${depKpi(depNow(), `账户资金 ${usd(eq)} · 持仓名义 ÷ 部署 ${(depNow() ? ntl / depNow() : 0).toFixed(2)}x`)}
   </div>
   ${card('风险提醒', `按 alert_rules 阈值生成；${S.live ? '持仓为实时数据，提醒仍为最近一次采集结果' : '最近一次采集结果'}`, table('rk-al', [
     { k: 'level', t: '级别', f: r => chip(r.level), v: r => ({ '严重': 3, '警告': 2, '提示': 1 }[r.level]) },
-    { k: 'label', t: '地址', f: r => `<a href="#address/${r.addr}">${esc(r.label)}</a>` },
+    { k: 'label', t: '地址', f: r => `<a href="#address/${r.addr}">${esc(r.label)}</a>${nmTag(r.addr)}`, v: r => r.label + nmOf(r.addr) },
     { k: 'rule', t: '规则' }, { k: 'message', t: '说明', f: r => `<span style="white-space:normal">${esc(r.message)}</span>` }, { k: 'day', t: '日期' }],
     A, { sort: 'level', empty: '无提醒' }))}
   <div class="grid g2">
@@ -858,9 +862,9 @@ function vRisk() {
     { k: 'threshold', t: '阈值', n: 1, f: r => r.threshold + r.unit }, { k: 'description', t: '说明', f: r => `<span style="white-space:normal">${esc(r.description)}</span>` }], S.D.alert_rules || []))}`;
   const after = () => {
     mk('rk-exp', 'bar', E.map(e => e.coin), [barDs('多头', E.map(e => e.long), css('--s3')), barDs('空头', E.map(e => -e.short), css('--s2'))], { horizontal: true, stacked: true });
-    mk('rk-lev', 'bar', levs.map(s => s.label.split(' ')[0]), [{ ...barDs('杠杆', levs.map(s => s.leverage)), backgroundColor: levs.map(s => s.leverage > (rules.leverage_max ?? 3) ? css('--neg') : css('--s1')) }],
+    mk('rk-lev', 'bar', levs.map(shortLab), [{ ...barDs('杠杆', levs.map(s => s.leverage)), backgroundColor: levs.map(s => s.leverage > (rules.leverage_max ?? 3) ? css('--neg') : css('--s1')) }],
       { horizontal: true, fmt: v => (+v).toFixed(1) + 'x', thresh: { value: rules.leverage_max ?? 3, label: '阈值' }, xmax: Math.max((rules.leverage_max ?? 3) * 1.2, ...levs.map(s => s.leverage)) });
-    mk('rk-dd', 'bar', dds.map(s => s.label.split(' ')[0]), [{ ...barDs('回撤', dds.map(s => s.drawdown_pct)), backgroundColor: dds.map(s => s.drawdown_pct > (rules.drawdown_pct ?? 10) / 100 ? css('--neg') : css('--s1')) }],
+    mk('rk-dd', 'bar', dds.map(shortLab), [{ ...barDs('回撤', dds.map(s => s.drawdown_pct)), backgroundColor: dds.map(s => s.drawdown_pct > (rules.drawdown_pct ?? 10) / 100 ? css('--neg') : css('--s1')) }],
       { horizontal: true, fmt: v => pct(v, 0), thresh: { value: (rules.drawdown_pct ?? 10) / 100, label: '阈值' } });
   };
   return [html, after];
@@ -1107,7 +1111,7 @@ function vStrategy(param) {
     ${card('周度 × 大类', 'ISO 周；交易净盈亏', table('sf-wk', [{ k: 'key', t: '周', nosort: 1, f: r => `<b>${r.key}</b> <span class="muted">${r.start.slice(5)}~${r.end.slice(5)}</span>` }]
       .concat(fams.map(f => ({ k: 'n_' + f, t: esc(f), n: 1, nosort: 1, f: r => sp(r['n_' + f]) })))
       .concat([{ k: 'n', t: '合计', n: 1, nosort: 1, f: r => `<b>${sp(r.n)}</b>` }, { k: 'v', t: '交易量', n: 1, nosort: 1, f: r => usd(r.v) }]), wkRows))}
-    ${card('地址 × 大类', '每个地址在各大类上的交易净盈亏（可排序）', table('sf-af', [{ k: 'label', t: '地址', f: r => `<a href="#address/${r.addr}">${esc(r.label)}</a>` }]
+    ${card('地址 × 大类', '每个地址在各大类上的交易净盈亏（可排序）', table('sf-af', [{ k: 'label', t: '地址', f: r => `<a href="#address/${r.addr}">${esc(r.label)}</a>${nmTag(r.addr)}`, v: r => r.label + nmOf(r.addr) }]
       .concat(fams.map(f => ({ k: 'n_' + f, t: esc(f), n: 1, f: r => r['v_' + f] ? sp(r['n_' + f] || 0) : '<span class="muted">—</span>', v: r => r['n_' + f] ?? -1e15 })))
       .concat([{ k: 'n', t: '合计', n: 1, f: r => `<b>${sp(r.n)}</b>` }, { k: 'dep', t: '部署金额', n: 1, v: r => depNow(byAddr(r.addr)), f: r => depCell(depNow(byAddr(r.addr))) }, { k: 'v', t: '交易量', n: 1, f: r => usd(r.v) }]), afRows, { sort: 'v', scroll: 1 }))}
   </div>`;
@@ -1184,7 +1188,7 @@ function stratDetail(days, M) {
     ${card('各部署累计净盈亏', `交易量前 ${top.length} 个部署`, legend(top.map((m, i) => [SERIES()[i], m.label.split(' ')[0]])) + chartBox('sd-cum', 'short'))}
   </div>
   ${card('部署明细', '该策略在每个地址上的表现', table('sd-mem', [
-    { k: 'label', t: '地址', f: r => `<a href="#address/${r.addr}">${esc(r.label)}</a>` },
+    { k: 'label', t: '地址', f: r => `<a href="#address/${r.addr}">${esc(r.label)}</a>${nmTag(r.addr)}`, v: r => r.label + nmOf(r.addr) },
     { k: 'first', t: '首次' }, { k: 'last', t: '最后成交' }, { k: 'days', t: '交易天数', n: 1 },
     { k: 'volume', t: '交易量', n: 1, f: r => usd(r.volume) }, { k: 'fills', t: '笔数', n: 1, f: r => int(r.fills) }, { k: 'fees', t: '手续费', n: 1, f: r => usd(r.fees) },
     { k: 'net', t: '交易净盈亏', n: 1, f: r => sp(r.net) }, { k: 'bps', t: 'bps', n: 1, f: r => `<span class="${cls(r.bps)}">${r.bps.toFixed(1)}</span>` },

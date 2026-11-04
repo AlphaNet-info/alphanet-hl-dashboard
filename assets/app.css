@@ -214,3 +214,6 @@ tr:last-child td { border-bottom: 0; }
 .cc .pl.on { color: #34d399; background: #0d2a1e; border: 1px solid #1d5b3f; } .cc .pl.off { color: #8b97a3; background: #141b22; border: 1px solid #222c36; }
 .cc-n { font-size: 10.5px; color: #5f6b78; margin-top: 10px; }
 .cc-f { display: flex; justify-content: space-between; font-size: 10.5px; color: #4d5864; margin-top: 12px; }
+
+/* 客户名 */
+.nm { display: inline-block; margin-left: 6px; padding: 0 7px; border-radius: 999px; font-size: 11.5px; line-height: 18px; font-weight: 500; color: var(--s1, #2563eb); background: color-mix(in srgb, var(--s1, #2563eb) 12%, transparent); white-space: nowrap; vertical-align: 1px; }
