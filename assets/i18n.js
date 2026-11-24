@@ -6,6 +6,8 @@
   let lang = 'zh';
   try { lang = localStorage.getItem('hl-lang') || 'zh'; } catch (e) {}
   const D = {
+    '客户入金': 'Client deposits', '客户': 'Client', '入金（客户合计）': 'Deposit (client total)', '关联地址': 'Linked wallets',
+    '按客户汇总；多地址客户的入金为全部关联地址合计': 'Grouped by client; deposits cover all linked wallets',
     // ---- 导航 / 视图 ----
     '公司总览': 'Overview', '周报 / 月报': 'Weekly / Monthly', '运营分析': 'Operations', '地址分析': 'Addresses',
     '客户卡片': 'Client Cards', '币种分析': 'Coins', '策略分析': 'Strategies', '风控与持仓': 'Risk & Positions',

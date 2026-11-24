@@ -47,6 +47,8 @@ python3 -m http.server 8000   # 打开 http://localhost:8000
 
 ## 修改监控名单和阈值
 
+客户名称维护在 `data/names.json` 的 `names` 中；`customers` 记录客户名称、`deposit_usd`（客户全部关联钱包的合计入金）和 `addresses`。多钱包客户不按地址拆分或重复累计入金。地址页显示客户入金汇总及详情，客户卡片也使用同一份客户资料。此入金记录不改动账户资金、部署金额和收益率口径。
+
 编辑 `pipeline/watchlist.json`：
 
 ```json

@@ -68,6 +68,8 @@ function prep(D) {
   S.label = Object.fromEntries(S.addrs.map(a => [a.addr, a.label]));
   S.group = Object.fromEntries(S.addrs.map(a => [a.addr, a.group || '未分组']));
   S.name = Object.fromEntries(Object.entries((D.names && D.names.names) || {}).map(([k, v]) => [k.toLowerCase(), v]));
+  S.customers = D.names?.customers || [];
+  S.customerByAddr = Object.fromEntries(S.customers.flatMap(c => c.addresses.map(a => [a.toLowerCase(), c])));
   S.dt = (D.daily_total || []).filter(r => !r.partial);
   S.days = S.dt.map(r => r.day);
   S.ad = (D.addr_daily || []).filter(r => !r.partial);
@@ -593,6 +595,11 @@ function vAddress(param) {
   if (param && S.label[param]) S.sel = param;
   if (!S.sel || !S.label[S.sel]) S.sel = rows.slice().sort((a, b) => b.equity_now - a.equity_now)[0]?.addr;
   const html = `
+  ${S.customers.length ? card('客户入金', '按客户汇总；多地址客户的入金为全部关联地址合计', table('customers', [
+    { k: 'name', t: '客户', f: c => `<b>${esc(c.name)}</b>` },
+    { k: 'deposit_usd', t: '入金（客户合计）', n: 1, f: c => usdFull(c.deposit_usd) },
+    { k: 'addresses', t: '关联地址', f: c => c.addresses.map(a => `<a href="#address/${a}">${esc(short(a))}</a>`).join(' · ') },
+  ], S.customers)) : ''}
   ${card('地址总览', `区间（${days[0]?.slice(5)} ~ ${days[days.length - 1]?.slice(5)}）口径的盈亏与交易量；资金、浮盈、杠杆为${S.live ? '实时' : '最近快照'}。点击行查看详情`,
     `<div class="toolbar"><input id="addr-q" placeholder="搜索地址 / 备注 / 分组" value="${esc(S.q || '')}"></div>` +
     table('addr', [
@@ -626,6 +633,7 @@ function vAddress(param) {
 function addrDetail(days) {
   const a = S.sel, box = $('#addr-detail');
   if (!a || !box) return;
+  const customer = S.customerByAddr[a.toLowerCase()];
   const s = S.summary.find(x => x.addr === a) || {};
   const set = new Set(days);
   const R = (S.adBy[a] || []).filter(r => set.has(r.day));
@@ -641,6 +649,7 @@ function addrDetail(days) {
     <a href="https://hypurrscan.io/address/${a}" target="_blank" rel="noopener">Hypurrscan ↗</a></div>
   ${AL.length ? `<div class="checks">${AL.map(x => `<div class="check"><span class="ic ${LV[x.level]}">!</span><div>${chip(x.level, x.rule)} ${esc(x.message)}</div></div>`).join('')}</div>` : ''}
   <div class="kpis">
+    ${customer ? kpi('入金（客户合计）', usdFull(customer.deposit_usd), `${esc(customer.name)} · ${customer.addresses.length} 个关联地址`) : ''}
     ${kpi('资金', usd(s.equity_now), `较前日 ${sp(s.equity_change_day)}`)}
     ${depKpi(depNow(byAddr(a)), [...new Set(S.deps.filter(d => d.addr === a && depActive(d, S.today)).map(d => d.coin))].join(' / ') + ` · 利用率 ${pct(s.equity_now ? depNow(byAddr(a)) / s.equity_now : 0, 0)}`)}
     ${kpi('区间官方盈亏', sp(g.pnl), `收益率 ${spp(g.roi)}`)}
@@ -749,6 +758,7 @@ const ccN = (v, sign = true) => {
 const ccT = (v, pctv) => v == null || (pctv ? Math.abs(v) < 0.00005 : Math.round(v) === 0) ? 'm' : v > 0 ? 'p' : 'n';
 
 function ccCard(c, asof) {
+  const customer = S.customerByAddr[c.addr.toLowerCase()];
   const ret = c.return_pct == null ? '—' : (c.return_pct > 0 ? '+' : c.return_pct < 0 ? '−' : '') + Math.abs(c.return_pct * 100).toFixed(2) + '%';
   const rows = c.rows.map(r => {
     const on = r.status === 'active', wr = r.win_rate;
@@ -767,7 +777,8 @@ function ccCard(c, asof) {
       <td class="${wc}">${wr == null ? '—' : (wr * 100).toFixed(1) + '%'}</td></tr>`;
   }).join('');
   return `<div class="cc" id="cc-card">
-    <div class="cc-h"><div class="cc-a"><span class="cc-b"></span>${c.addr.slice(0, 6)}...${c.addr.slice(-4)}</div><div class="cc-br"><b>AlphaNet</b> · HYPERLIQUID</div></div>
+    <div class="cc-h"><div class="cc-a"><span class="cc-b"></span>${nmOf(c.addr) ? esc(nmOf(c.addr)) + ' · ' : ''}${c.addr.slice(0, 6)}...${c.addr.slice(-4)}</div><div class="cc-br"><b>AlphaNet</b> · HYPERLIQUID</div></div>
+    ${customer ? `<div class="cc-c">Client deposit (all ${customer.addresses.length} linked wallets): ${usdFull(customer.deposit_usd)}</div>` : ''}
     <div class="cc-tiles">
       <div class="cc-t1">
         <div><div class="cc-l">Total PnL</div><div class="cc-v ${ccT(c.total_pnl)}">${ccN(c.total_pnl)}</div></div>
@@ -791,7 +802,7 @@ function vCards(param) {
   const c = cards.find(x => x.addr.toLowerCase() === want) || cards[0];
   S.ccSel = c.addr;
   const asof = bj(D.generated_at).slice(0, 16);
-  const opt = cards.map(x => `<option value="${x.addr}" ${x.addr === c.addr ? 'selected' : ''}>${esc(S.label[x.addr.toLowerCase()] || S.label[x.addr] || (x.addr.slice(0, 6) + '…' + x.addr.slice(-4)))} · 资产 ${usd(x.assets)} · 盈亏 ${ccN(x.total_pnl)}</option>`).join('');
+  const opt = cards.map(x => `<option value="${x.addr}" ${x.addr === c.addr ? 'selected' : ''}>${nmOf(x.addr) ? esc(nmOf(x.addr)) + ' · ' : ''}${esc(S.label[x.addr.toLowerCase()] || S.label[x.addr] || (x.addr.slice(0, 6) + '…' + x.addr.slice(-4)))} · 资产 ${usd(x.assets)} · 盈亏 ${ccN(x.total_pnl)}</option>`).join('');
   const html = `
   ${card('选择客户', `共 ${cards.length} 个部署过的钱包 · 数据生成于 ${bj(D.generated_at)}${D.errors && D.errors.length ? ` · <span class="neg">${D.errors.length} 个失败</span>` : ''}`,
     `<div class="toolbar cc-bar"><select id="cc-sel">${opt}</select><button class="btn" id="cc-png">⤓ 下载图片</button><button class="btn" id="cc-copy">⧉ 复制图片</button><span class="muted" id="cc-msg"></span></div>`)}

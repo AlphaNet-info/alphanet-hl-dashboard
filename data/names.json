@@ -16,14 +16,47 @@
   "0xc7d3784cb11b734f51923fc7ea7928b0b627d066": "David",
   "0xe222108c1386b7782ef84e89d1e2121b2d0cc8ec": "Olivier's Friend",
   "0xd5b5abeec4debbb5ced03184c6d9c3b6288924ba": "Olivier's Friend",
-  "0x23e25c765caaac62cff0f1ac28981685abe76e32": "Olivier's Friend",
+  "0x23e25c765caaac62cff0f1ac28981685abe76e32": "Josuha from O",
   "0xa7a596346cc5957304a053f1e7ccec21b3ed5618": "Olivier's Friend",
-  "0x28c548887b8035ae76cc08e4dd8764b3fd803a3c": "Matt's new wallet",
-  "0xcbab139eb450c00e3a2d55a3db52ee9c8f17a134": "Olivier's Friend",
+  "0x28c548887b8035ae76cc08e4dd8764b3fd803a3c": "Matt",
+  "0xcbab139eb450c00e3a2d55a3db52ee9c8f17a134": "Angelo from O",
   "0xf35f397cb2ef0e937a0912797809f2d4eae78e9d": "Olivier's Friend",
-  "0x37cdc0755a4d54825afd1caa32143717f276a971": "Olivier's Friend",
+  "0x37cdc0755a4d54825afd1caa32143717f276a971": "Josuha from O",
   "0xfbc0de43c629f5695dbc168704da12a13048900d": "Lin",
   "0x2f77691478ed6bf9028511311542ad145af1c2b8": "Aleks",
   "0x1b8666b5463bb640196bb473114fca40b43dbca7": "CC"
- }
+ },
+ "customers": [
+  {
+   "name": "Josuha from O",
+   "deposit_usd": 473000,
+   "addresses": [
+    "0x23e25c765caaac62cff0f1ac28981685abe76e32",
+    "0x37cdc0755a4d54825afd1caa32143717f276a971"
+   ]
+  },
+  {
+   "name": "Matt",
+   "deposit_usd": 72000,
+   "addresses": [
+    "0x28c548887b8035ae76cc08e4dd8764b3fd803a3c"
+   ]
+  },
+  {
+   "name": "Angelo from O",
+   "deposit_usd": 98000,
+   "addresses": [
+    "0xcbab139eb450c00e3a2d55a3db52ee9c8f17a134"
+   ]
+  },
+  {
+   "name": "Olivier",
+   "deposit_usd": 451000,
+   "addresses": [
+    "0x7ab4f8fe6290ae2577b908ae81638227ef1dff77",
+    "0xcb7c5f0f5b0338d1bc380b12659e6b28d76626b6"
+   ]
+  }
+ ],
+ "_customer_source": "User update 2026-11-24; deposits are client totals across listed wallets"
 }
