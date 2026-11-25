@@ -144,7 +144,7 @@ function applyLive() {
     const upnl = sum(ps, p => p.unrealized_pnl), ntl = +ms.totalNtlPos || 0;
     const liq = ps.filter(p => p.liq_distance != null).sort((a, b) => a.liq_distance - b.liq_distance)[0];
     Object.assign(s, { equity_now: eq, unrealized_pnl: upnl, unrealized_pct: eq > 1 ? upnl / eq : 0, position_ntl: ntl,
-      margin_used: +ms.totalMarginUsed || 0, leverage: eq > 1 ? ntl / eq : 0, positions_count: ps.length,
+      margin_used: +ms.totalMarginUsed || 0, leverage: eq > 1 ? ntl / eq : 0, positions_count: ps.length, positions: ps.map(p=>p.coin+' '+p.side).join(' / ') || '无持仓',
       liq_distance_min: liq ? liq.liq_distance : null, _live: true,
       live_pnl_24h: L.port && L.port[s.addr] ? L.port[s.addr].pnl : null, live_vlm_24h: L.port && L.port[s.addr] ? L.port[s.addr].vlm : null });
   }
@@ -595,6 +595,7 @@ function vAddress(param) {
   if (param && S.label[param]) S.sel = param;
   if (!S.sel || !S.label[S.sel]) S.sel = rows.slice().sort((a, b) => b.equity_now - a.equity_now)[0]?.addr;
   const html = `
+  <div id="addr-detail"></div>
   ${S.customers.length ? card('客户入金', '按客户汇总；多地址客户的入金为全部关联地址合计', table('customers', [
     { k: 'name', t: '客户', f: c => `<b>${esc(c.name)}</b>` },
     { k: 'deposit_usd', t: '入金（客户合计）', n: 1, f: c => usdFull(c.deposit_usd) },
@@ -608,15 +609,14 @@ function vAddress(param) {
       { k: 'equity_now', t: '资金', n: 1, f: r => usd(r.equity_now) },
       { k: 'dep', t: '部署金额', n: 1, v: r => depNow(byAddr(r.addr)), f: r => depCell(depNow(byAddr(r.addr))) },
       { k: 'rp', t: '区间盈亏', n: 1, f: r => sp(r.r.pnl), v: r => r.r.pnl },
-      { k: 'rr', t: '收益率', n: 1, f: r => spp(r.r.roi), v: r => r.r.roi },
-      { k: 'pnl_day', t: '昨日盈亏', n: 1, f: r => sp(r.pnl_day) },
+      { k: 'pnl_day', t: '最近完整日盈亏', n: 1, f: r => sp(r.pnl_day) },
       { k: 'rv', t: '区间交易量', n: 1, f: r => usd(r.r.volume), v: r => r.r.volume },
       { k: 'unrealized_pnl', t: '浮动盈亏', n: 1, f: r => sp(r.unrealized_pnl) },
       { k: 'leverage', t: '杠杆', n: 1, f: r => r.leverage ? r.leverage.toFixed(2) + 'x' : '—' },
-      { k: 'drawdown_pct', t: '当前回撤', n: 1, f: r => r.drawdown_pct ? `<span class="${r.drawdown_pct > .1 ? 'neg' : ''}">${pct(r.drawdown_pct, 1)}</span>` : '—' },
+      { k: 'drawdown_pct', t: '快照回撤', n: 1, f: r => r.drawdown_pct ? `<span class="${r.drawdown_pct > .1 ? 'neg' : ''}">${pct(r.drawdown_pct, 1)}</span>` : '—' },
       { k: 'positions', t: '持仓', f: r => `<span class="muted">${esc(r.positions)}</span>` },
     ], rows.filter(r => !S.q || (r.label + r.addr + r.group + nmOf(r.addr)).toLowerCase().includes(S.q.toLowerCase())), { sort: 'equity_now', click: 'addr', selKey: 'addr', scroll: 1 }))}
-  <div id="addr-detail"></div>
+
   ${card('地址 × 日期 盈亏热力图', '每格为当日官方盈亏占前日资金的比例；颜色越深幅度越大', heatmap(
     S.addrs.map(a => a.addr), a => S.label[a],
     days, (a, d) => { const r = (S.adBy[a] || []).find(x => x.day === d); return r ? { v: r.pnl_pct, t: `${S.label[a]}\n${d}\n盈亏 ${usd(r.pnl_day, { sign: true })}（${pct(r.pnl_pct, 2, true)}）\n交易量 ${usd(r.volume)}` } : null; },
@@ -647,18 +647,16 @@ function addrDetail(days) {
   <div class="sec-t">${esc(s.label)}${nmTag(a)} <span class="addr">${a}</span>
     <a href="https://app.hyperliquid.xyz/explorer/address/${a}" target="_blank" rel="noopener">HL Explorer ↗</a>
     <a href="https://hypurrscan.io/address/${a}" target="_blank" rel="noopener">Hypurrscan ↗</a></div>
-  ${AL.length ? `<div class="checks">${AL.map(x => `<div class="check"><span class="ic ${LV[x.level]}">!</span><div>${chip(x.level, x.rule)} ${esc(x.message)}</div></div>`).join('')}</div>` : ''}
+  <div id="wallet-status">正在核实钱包现状…</div>
+  <h3>历史表现 · 截至 ${esc(S.days[S.days.length-1])} UTC</h3>
+  ${AL.length ? `<div class="muted">采集时的提醒 · ${esc(s.snapshot_at || '')}</div><div class="checks">${AL.map(x => `<div class="check"><span class="ic ${LV[x.level]}">!</span><div>${chip(x.level, x.rule)} ${esc(x.message)}</div></div>`).join('')}</div>` : ''}
   <div class="kpis">
     ${customer ? kpi('入金（客户合计）', usdFull(customer.deposit_usd), `${esc(customer.name)} · ${customer.addresses.length} 个关联地址`) : ''}
-    ${kpi('资金', usd(s.equity_now), `较前日 ${sp(s.equity_change_day)}`)}
-    ${depKpi(depNow(byAddr(a)), [...new Set(S.deps.filter(d => d.addr === a && depActive(d, S.today)).map(d => d.coin))].join(' / ') + ` · 利用率 ${pct(s.equity_now ? depNow(byAddr(a)) / s.equity_now : 0, 0)}`)}
-    ${kpi('区间官方盈亏', sp(g.pnl), `收益率 ${spp(g.roi)}`)}
-    ${kpi('本期累计盈亏', sp(s.pnl_period), `收益率 ${spp(s.pnl_period_pct)}`)}
+    ${kpi('区间官方盈亏', sp(g.pnl), '按所选日期汇总，资金转出不计作亏损')}
+    ${kpi('全期官方盈亏', sp(s.pnl_period), '自看板统计起点累计')}
     ${kpi('区间交易量', usd(g.volume), `手续费 ${usd(g.fees)}`)}
     ${kpi('交易净盈亏', sp(g.realized_pnl - g.fees + g.funding), `已实现 ${sp(g.realized_pnl)} · 资金费 ${sp(g.funding)}`)}
-    ${kpi('浮动盈亏', sp(s.unrealized_pnl), `占资金 ${spp(s.unrealized_pct)}`)}
-    ${kpi('杠杆 / 名义', `${(s.leverage || 0).toFixed(2)}x`, usd(s.position_ntl))}
-    ${kpi('最大回撤', usd(s.max_drawdown), `当前 ${pct(s.drawdown_pct, 1)}`)}
+    ${kpi('历史最大回撤', usd(s.max_drawdown), '累计官方盈亏从高点回落的最大金额')}
   </div>
   <div class="grid g2">
     ${card(S.hasDep ? '资金与部署金额' : '资金曲线', '', (S.hasDep ? legend([[css('--s1'), '账户资金'], [css('--s2'), '部署金额']]) : '') + chartBox('d-eq', 'short'))}
@@ -668,12 +666,13 @@ function addrDetail(days) {
     ${card('币种贡献', '区间成交口径', table('d-coin', [{ k: 'coin', t: '币种', f: r => `<b>${esc(r.coin)}</b>` }, { k: 'st', t: '策略', v: r => stratOf(a, r.coin).strategy, f: r => { const c = stratOf(a, r.coin); return `<a href="#strategy/${encodeURIComponent(c.strategy)}">${esc(c.name || c.strategy)}</a>`; } }, { k: 'dep', t: '部署金额', n: 1, v: r => depNow(d => d.addr === a && d.coin === r.coin), f: r => depCell(depNow(d => d.addr === a && d.coin === r.coin)) }, { k: 'volume', t: '交易量', n: 1, f: r => usd(r.volume) },
       { k: 'fills', t: '笔数', n: 1, f: r => int(r.fills) }, { k: 'realized_pnl', t: '已实现', n: 1, f: r => sp(r.realized_pnl) }, { k: 'fees', t: '手续费', n: 1, f: r => usd(r.fees) },
       { k: 'net', t: '净盈亏', n: 1, f: r => sp(r.net) }], coins, { sort: 'volume' }))}
-    ${card('当前持仓', S.live ? '实时' : '最近快照', posTable('d-pos', P, true))}
+    ${card('持仓明细 · 留存记录', s._live ? bj(S.live.at) : s.snapshot_at, posTable('d-pos', P, true))}
   </div>
   ${card('每日明细', '', table('d-daily', [{ k: 'day', t: '日期' }, { k: 'volume', t: '交易量', n: 1, f: r => usd(r.volume) }, { k: 'fills', t: '笔数', n: 1 },
     { k: 'realized_pnl', t: '已实现', n: 1, f: r => sp(r.realized_pnl) }, { k: 'fees', t: '手续费', n: 1, f: r => usd(r.fees) }, { k: 'funding', t: '资金费', n: 1, f: r => sp(r.funding) },
     { k: 'pnl_day', t: '官方盈亏', n: 1, f: r => sp(r.pnl_day) }, { k: 'pnl_pct', t: '收益率', n: 1, f: r => spp(r.pnl_pct, 3) },
     { k: 'equity', t: '日终资金', n: 1, f: r => usd(r.equity) }, { k: 'dep', t: '部署金额', n: 1, v: r => depOn(r.day, byAddr(a)), f: r => depCell(depOn(r.day, byAddr(a))) }, { k: 'net_flow', t: '净流入', n: 1, f: r => sp(r.net_flow) }], R, { sort: 'day', scroll: 1 }))}`;
+  walletStatus(a, $('#wallet-status'));
   const L = R.map(r => shortDay(r.day));
   mk('d-eq', 'line', L, [lineDs('账户资金', R.map(r => r.equity), css('--s1'), true)].concat(S.hasDep ? [lineDs('部署金额', R.map(r => depOn(r.day, byAddr(a))), css('--s2'))] : []), { zero: false });
   const pd = R.map(r => r.pnl_day);
